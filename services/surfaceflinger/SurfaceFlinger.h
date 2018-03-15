@@ -341,6 +341,8 @@ public:
     const Vector< sp<Layer> >& getLayerSortedByZForHwcDisplay(int id);
 
     RE::RenderEngine& getRenderEngine() const { return *getBE().mRenderEngine; }
+    
+    void setTranslate(int x, int y);
 
     bool authenticateSurfaceTextureLocked(
         const sp<IGraphicBufferProducer>& bufferProducer) const;
