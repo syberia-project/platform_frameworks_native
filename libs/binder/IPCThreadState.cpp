@@ -449,7 +449,7 @@ status_t IPCThreadState::getAndExecuteCommand()
 
         pthread_mutex_lock(&mProcess->mThreadCountLock);
         mProcess->mExecutingThreadsCount++;
-        if (mProcess->mExecutingThreadsCount >= mProcess->mMaxThreads &&
+        if (mProcess->mExecutingThreadsCount > mProcess->mMaxThreads &&
                 mProcess->mStarvationStartTimeMs == 0) {
             mProcess->mStarvationStartTimeMs = uptimeMillis();
         }
@@ -459,7 +459,7 @@ status_t IPCThreadState::getAndExecuteCommand()
 
         pthread_mutex_lock(&mProcess->mThreadCountLock);
         mProcess->mExecutingThreadsCount--;
-        if (mProcess->mExecutingThreadsCount < mProcess->mMaxThreads &&
+        if (mProcess->mExecutingThreadsCount <= mProcess->mMaxThreads &&
                 mProcess->mStarvationStartTimeMs != 0) {
             int64_t starvationTimeMs = uptimeMillis() - mProcess->mStarvationStartTimeMs;
             if (starvationTimeMs > 100) {
