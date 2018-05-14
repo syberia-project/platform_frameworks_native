@@ -29,7 +29,7 @@
 #include <utils/threads.h>
 
 #include <ui/FrameStats.h>
-#include <ui/GraphicsTypes.h>
+#include <ui/GraphicTypes.h>
 #include <ui/PixelFormat.h>
 
 #include <gui/CpuConsumer.h>
@@ -89,13 +89,14 @@ public:
 
     // Gets the list of supported color modes for the given display
     static status_t getDisplayColorModes(const sp<IBinder>& display,
-            Vector<ColorMode>* outColorModes);
+            Vector<ui::ColorMode>* outColorModes);
 
     // Gets the active color mode for the given display
-    static ColorMode getActiveColorMode(const sp<IBinder>& display);
+    static ui::ColorMode getActiveColorMode(const sp<IBinder>& display);
 
     // Sets the active color mode for the given display
-    static status_t setActiveColorMode(const sp<IBinder>& display, ColorMode colorMode);
+    static status_t setActiveColorMode(const sp<IBinder>& display,
+            ui::ColorMode colorMode);
 
     /* Triggers screen on/off or low power mode and waits for it to complete */
     static void setDisplayPowerMode(const sp<IBinder>& display, int mode);
@@ -153,6 +154,7 @@ public:
         uint32_t                    mForceSynchronous = 0;
         uint32_t                    mTransactionNestCount = 0;
         bool                        mAnimation = false;
+        bool                        mEarlyWakeup = false;
 
         int mStatus = NO_ERROR;
 
@@ -272,6 +274,7 @@ public:
                 const Rect& displayRect);
         void setDisplaySize(const sp<IBinder>& token, uint32_t width, uint32_t height);
         void setAnimationTransaction();
+        void setEarlyWakeup();
     };
 
     status_t    destroySurface(const sp<IBinder>& id);

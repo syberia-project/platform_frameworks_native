@@ -22,7 +22,8 @@
 #include <string>
 
 using android::base::StringPrintf;
-using android::ColorMode;
+using android::ui::ColorMode;
+using android::ui::RenderIntent;
 
 std::string decodeStandard(android_dataspace dataspace) {
     const uint32_t dataspaceSelect = (dataspace & HAL_DATASPACE_STANDARD_MASK);
@@ -229,9 +230,45 @@ std::string decodeColorMode(ColorMode colorMode) {
 
         case ColorMode::DISPLAY_P3:
             return std::string("ColorMode::DISPLAY_P3");
+
+        case ColorMode::BT2020:
+            return std::string("ColorMode::BT2020");
+
+        case ColorMode::BT2100_PQ:
+            return std::string("ColorMode::BT2100_PQ");
+
+        case ColorMode::BT2100_HLG:
+            return std::string("ColorMode::BT2100_HLG");
     }
 
     return android::base::StringPrintf("Unknown color mode %d", colorMode);
+}
+
+std::string decodeColorTransform(android_color_transform colorTransform) {
+    switch (colorTransform) {
+        case HAL_COLOR_TRANSFORM_IDENTITY:
+            return std::string("Identity");
+
+        case HAL_COLOR_TRANSFORM_ARBITRARY_MATRIX:
+            return std::string("Arbitrary matrix");
+
+        case HAL_COLOR_TRANSFORM_VALUE_INVERSE:
+            return std::string("Inverse value");
+
+        case HAL_COLOR_TRANSFORM_GRAYSCALE:
+            return std::string("Grayscale");
+
+        case HAL_COLOR_TRANSFORM_CORRECT_PROTANOPIA:
+            return std::string("Correct protanopia");
+
+        case HAL_COLOR_TRANSFORM_CORRECT_DEUTERANOPIA:
+            return std::string("Correct deuteranopia");
+
+        case HAL_COLOR_TRANSFORM_CORRECT_TRITANOPIA:
+            return std::string("Correct tritanopia");
+    }
+
+    return android::base::StringPrintf("Unknown color transform %d", colorTransform);
 }
 
 // Converts a PixelFormat to a human-readable string.  Max 11 chars.
@@ -265,6 +302,20 @@ std::string decodePixelFormat(android::PixelFormat format) {
         default:
             return android::base::StringPrintf("Unknown %#08x", format);
     }
+}
+
+std::string decodeRenderIntent(RenderIntent renderIntent) {
+    switch(renderIntent) {
+      case RenderIntent::COLORIMETRIC:
+          return std::string("RenderIntent::COLORIMETRIC");
+      case RenderIntent::ENHANCE:
+          return std::string("RenderIntent::ENHANCE");
+      case RenderIntent::TONE_MAP_COLORIMETRIC:
+          return std::string("RenderIntent::TONE_MAP_COLORIMETRIC");
+      case RenderIntent::TONE_MAP_ENHANCE:
+          return std::string("RenderIntent::TONE_MAP_ENHANCE");
+    }
+    return std::string("Unknown RenderIntent");
 }
 
 std::string to_string(const android::Rect& rect) {

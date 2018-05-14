@@ -23,8 +23,7 @@
 #include <sys/types.h>
 
 #include <ui/Fence.h>
-#include <ui/GraphicsTypes.h>
-
+#include <ui/GraphicTypes.h>
 #include <utils/BitSet.h>
 #include <utils/Condition.h>
 #include <utils/Mutex.h>
@@ -80,7 +79,7 @@ public:
     // Attempts to allocate a virtual display. If the virtual display is created
     // on the HWC device, outId will contain its HWC ID.
     status_t allocateVirtualDisplay(uint32_t width, uint32_t height,
-            android_pixel_format_t* format, int32_t* outId);
+            ui::PixelFormat* format, int32_t* outId);
 
     // Attempts to create a new layer on this display
     HWC2::Layer* createLayer(int32_t displayId);
@@ -92,7 +91,7 @@ public:
 
     status_t setClientTarget(int32_t displayId, uint32_t slot,
             const sp<Fence>& acquireFence,
-            const sp<GraphicBuffer>& target, android_dataspace_t dataspace);
+            const sp<GraphicBuffer>& target, ui::Dataspace dataspace);
 
     // Present layers to the display and read releaseFences.
     status_t presentAndGetReleaseFences(int32_t displayId);
@@ -134,8 +133,15 @@ public:
     // it can call this to clear the shared pointers in the release fence map
     void clearReleaseFences(int32_t displayId);
 
-    // Returns the HDR capabilities of the given display
-    std::unique_ptr<HdrCapabilities> getHdrCapabilities(int32_t displayId);
+    // Fetches the HDR capabilities of the given display
+    status_t getHdrCapabilities(int32_t displayId, HdrCapabilities* outCapabilities);
+
+    int32_t getSupportedPerFrameMetadata(int32_t displayId) const;
+
+    // Returns the available RenderIntent of the given display.
+    std::vector<ui::RenderIntent> getRenderIntents(int32_t displayId, ui::ColorMode colorMode) const;
+
+    mat4 getDataspaceSaturationMatrix(int32_t displayId, ui::Dataspace dataspace);
 
     // Events handling ---------------------------------------------------------
 
@@ -159,9 +165,10 @@ public:
     std::shared_ptr<const HWC2::Display::Config>
             getActiveConfig(int32_t displayId) const;
 
-    std::vector<ColorMode> getColorModes(int32_t displayId) const;
+    std::vector<ui::ColorMode> getColorModes(int32_t displayId) const;
 
-    status_t setActiveColorMode(int32_t displayId, ColorMode mode);
+    status_t setActiveColorMode(int32_t displayId, ui::ColorMode mode,
+            ui::RenderIntent renderIntent);
 
     bool isUsingVrComposer() const;
 

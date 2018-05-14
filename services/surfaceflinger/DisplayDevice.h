@@ -21,17 +21,18 @@
 
 #include <stdlib.h>
 
-#include <ui/Region.h>
+#include <math/mat4.h>
 
 #include <binder/IBinder.h>
+#include <gui/ISurfaceComposer.h>
+#include <hardware/hwcomposer_defs.h>
+#include <ui/GraphicTypes.h>
+#include <ui/Region.h>
 #include <utils/RefBase.h>
 #include <utils/Mutex.h>
 #include <utils/String8.h>
 #include <utils/Timers.h>
 
-#include <gui/ISurfaceComposer.h>
-#include <hardware/hwcomposer_defs.h>
-#include <ui/GraphicsTypes.h>
 #include "RenderArea.h"
 #include "RenderEngine/Surface.h"
 
@@ -82,8 +83,9 @@ public:
             std::unique_ptr<RE::Surface> renderSurface,
             int displayWidth,
             int displayHeight,
-            bool supportWideColor,
-            bool supportHdr,
+            bool hasWideColorGamut,
+            const HdrCapabilities& hdrCapabilities,
+            const int32_t supportedPerFrameMetadata,
             int initialPowerMode);
     // clang-format on
 
@@ -128,13 +130,18 @@ public:
     bool                    isPrimary() const { return mType == DISPLAY_PRIMARY; }
     int32_t                 getHwcDisplayId() const { return mHwcDisplayId; }
     const wp<IBinder>&      getDisplayToken() const { return mDisplayToken; }
+    uint32_t                getPanelMountFlip() const { return mPanelMountFlip; }
+
+    int32_t getSupportedPerFrameMetadata() const { return mSupportedPerFrameMetadata; }
 
     // We pass in mustRecompose so we can keep VirtualDisplaySurface's state
     // machine happy without actually queueing a buffer if nothing has changed
     status_t beginFrame(bool mustRecompose) const;
     status_t prepareFrame(HWComposer& hwc);
-    bool getWideColorSupport() const { return mDisplayHasWideColor; }
-    bool getHdrSupport() const { return mDisplayHasHdr; }
+    bool hasWideColorGamut() const { return mHasWideColorGamut; }
+    bool hasHDR10Support() const { return mHasHdr10; }
+    bool hasHLGSupport() const { return mHasHLG; }
+    bool hasDolbyVisionSupport() const { return mHasDolbyVision; }
 
     void swapBuffers(HWComposer& hwc) const;
 
@@ -161,9 +168,14 @@ public:
     void setPowerMode(int mode);
     bool isDisplayOn() const;
 
-    ColorMode getActiveColorMode() const;
-    void setActiveColorMode(ColorMode mode);
-    void setCompositionDataSpace(android_dataspace dataspace);
+    ui::ColorMode getActiveColorMode() const;
+    void setActiveColorMode(ui::ColorMode mode);
+    ui::RenderIntent getActiveRenderIntent() const;
+    void setActiveRenderIntent(ui::RenderIntent renderIntent);
+    android_color_transform_t getColorTransform() const;
+    void setColorTransform(const mat4& transform);
+    void setCompositionDataSpace(ui::Dataspace dataspace);
+    ui::Dataspace getCompositionDataSpace() const;
 
     /* ------------------------------------------------------------------------
      * Display active config management.
@@ -179,6 +191,8 @@ public:
      */
     uint32_t getPageFlipCount() const;
     void dump(String8& result) const;
+    void setColorMatrix(const bool colorMatrix) {mDisplayHasColorMatrix = colorMatrix;}
+    bool hasColorMatrix() const {return mDisplayHasColorMatrix;}
 
 private:
     /*
@@ -213,7 +227,7 @@ private:
     /*
      * Transaction state
      */
-    static status_t orientationToTransfrom(int orientation,
+    status_t orientationToTransfrom(int orientation,
             int w, int h, Transform* tr);
 
     // The identifier of the active layer stack for this display. Several displays
@@ -235,14 +249,25 @@ private:
     int mPowerMode;
     // Current active config
     int mActiveConfig;
+    // Panel's mount flip, H, V or 180 (HV)
+    uint32_t mPanelMountFlip;
     // current active color mode
-    ColorMode mActiveColorMode;
+    ui::ColorMode mActiveColorMode;
+    // Current active render intent.
+    ui::RenderIntent mActiveRenderIntent;
+    ui::Dataspace mCompositionDataSpace;
+    // Current color transform
+    android_color_transform_t mColorTransform;
 
     // Need to know if display is wide-color capable or not.
     // Initialized by SurfaceFlinger when the DisplayDevice is created.
     // Fed to RenderEngine during composition.
-    bool mDisplayHasWideColor;
-    bool mDisplayHasHdr;
+    bool mHasWideColorGamut;
+    bool mHasHdr10;
+    bool mHasHLG;
+    bool mHasDolbyVision;
+    const int32_t mSupportedPerFrameMetadata;
+    bool mDisplayHasColorMatrix;
 };
 
 struct DisplayDeviceState {
@@ -275,7 +300,8 @@ public:
                               rotation) {}
     DisplayRenderArea(const sp<const DisplayDevice> device, Rect sourceCrop, uint32_t reqHeight,
                       uint32_t reqWidth, ISurfaceComposer::Rotation rotation)
-          : RenderArea(reqHeight, reqWidth, rotation), mDevice(device), mSourceCrop(sourceCrop) {}
+          : RenderArea(reqHeight, reqWidth, CaptureFill::OPAQUE, rotation), mDevice(device),
+                              mSourceCrop(sourceCrop) {}
 
     const Transform& getTransform() const override { return mDevice->getTransform(); }
     Rect getBounds() const override { return mDevice->getBounds(); }
@@ -284,10 +310,13 @@ public:
     bool isSecure() const override { return mDevice->isSecure(); }
     bool needsFiltering() const override { return mDevice->needsFiltering(); }
     Rect getSourceCrop() const override { return mSourceCrop; }
-    bool getWideColorSupport() const override { return mDevice->getWideColorSupport(); }
-    ColorMode getActiveColorMode() const override {
-        return mDevice->getActiveColorMode();
+    bool getWideColorSupport() const override { return mDevice->hasWideColorGamut(); }
+    ui::Dataspace getDataSpace() const override {
+        return mDevice->getCompositionDataSpace();
     }
+    int32_t getDisplayType() { return mDevice->getDisplayType(); }
+    uint32_t getPanelMountFlip() { return mDevice->getPanelMountFlip(); }
+    std::string getType() const override { return "DisplayRenderArea"; }
 
 private:
     const sp<const DisplayDevice> mDevice;

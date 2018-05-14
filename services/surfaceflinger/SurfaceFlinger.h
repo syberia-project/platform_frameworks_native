@@ -33,6 +33,7 @@
 #include <utils/RefBase.h>
 #include <utils/SortedVector.h>
 #include <utils/threads.h>
+#include <utils/Trace.h>
 
 #include <ui/FenceTime.h>
 #include <ui/PixelFormat.h>
@@ -54,12 +55,15 @@
 #include "Barrier.h"
 #include "DisplayDevice.h"
 #include "DispSync.h"
+#include "EventThread.h"
 #include "FrameTracker.h"
+#include "LayerStats.h"
 #include "LayerVector.h"
 #include "MessageQueue.h"
 #include "SurfaceInterceptor.h"
 #include "SurfaceTracing.h"
 #include "StartPropertySetThread.h"
+#include "VSyncModulator.h"
 
 #include "DisplayHardware/HWC2.h"
 #include "DisplayHardware/HWComposer.h"
@@ -115,7 +119,14 @@ enum {
     eTransactionNeeded        = 0x01,
     eTraversalNeeded          = 0x02,
     eDisplayTransactionNeeded = 0x04,
-    eTransactionMask          = 0x07
+    eDisplayLayerStackChanged = 0x08,
+    eTransactionMask          = 0x0f,
+};
+
+enum class DisplayColorSetting : int32_t {
+    MANAGED = 0,
+    UNMANAGED = 1,
+    ENHANCED = 2,
 };
 
 // A thin interface to abstract creating instances of Surface (gui/Surface.h) to
@@ -302,8 +313,6 @@ public:
 
     // force full composition on all displays
     void repaintEverything();
-    // Can only be called from the main thread or with mStateLock held
-    void repaintEverythingLocked();
 
     // returns the default Display
     sp<const DisplayDevice> getDefaultDisplayDevice() const {
@@ -383,6 +392,7 @@ private:
     virtual status_t onTransact(uint32_t code, const Parcel& data,
         Parcel* reply, uint32_t flags);
     virtual status_t dump(int fd, const Vector<String16>& args) { return priorityDump(fd, args); }
+    virtual status_t doDump(int fd, const Vector<String16>& args, bool asProto);
 
     /* ------------------------------------------------------------------------
      * ISurfaceComposer interface
@@ -413,9 +423,9 @@ private:
             Vector<DisplayInfo>* configs);
     virtual int getActiveConfig(const sp<IBinder>& display);
     virtual status_t getDisplayColorModes(const sp<IBinder>& display,
-            Vector<ColorMode>* configs);
-    virtual ColorMode getActiveColorMode(const sp<IBinder>& display);
-    virtual status_t setActiveColorMode(const sp<IBinder>& display, ColorMode colorMode);
+            Vector<ui::ColorMode>* configs);
+    virtual ui::ColorMode getActiveColorMode(const sp<IBinder>& display);
+    virtual status_t setActiveColorMode(const sp<IBinder>& display, ui::ColorMode colorMode);
     virtual void setPowerMode(const sp<IBinder>& display, int mode);
     virtual status_t setActiveConfig(const sp<IBinder>& display, int id);
     virtual status_t clearAnimationFrameStats();
@@ -452,6 +462,9 @@ private:
     virtual void handleDPTransactionIfNeeded(
                      const Vector<DisplayState>& /*displays*/) { }
 
+    virtual void setDisplayAnimating(const sp<const DisplayDevice>& /*hw*/,
+                                     const int32_t& /*dpy*/) { }
+
     /* ------------------------------------------------------------------------
      * Message handling
      */
@@ -471,7 +484,9 @@ private:
                               bool stateLockHeld);
 
     // Called on the main thread in response to setActiveColorMode()
-    void setActiveColorModeInternal(const sp<DisplayDevice>& hw, ColorMode colorMode);
+    void setActiveColorModeInternal(const sp<DisplayDevice>& hw,
+                                    ui::ColorMode colorMode,
+                                    ui::Dataspace dataSpace);
 
     // Returns whether the transaction actually modified any state
     bool handleMessageTransaction();
@@ -499,6 +514,7 @@ private:
     uint32_t peekTransactionFlags();
     // Can only be called from the main thread or with mStateLock held
     uint32_t setTransactionFlags(uint32_t flags);
+    uint32_t setTransactionFlags(uint32_t flags, VSyncModulator::TransactionStart transactionStart);
     void commitTransaction();
     bool containsAnyInvalidClientState(const Vector<ComposerState>& states);
     uint32_t setClientStateLocked(const ComposerState& composerState);
@@ -644,9 +660,10 @@ private:
 
     // Given a dataSpace, returns the appropriate color_mode to use
     // to display that dataSpace.
-    ColorMode pickColorMode(android_dataspace dataSpace) const;
-    android_dataspace bestTargetDataSpace(android_dataspace a, android_dataspace b,
-            bool hasHdr) const;
+    ui::Dataspace getBestDataspace(const sp<const DisplayDevice>& displayDevice) const;
+    void pickColorMode(const sp<DisplayDevice>& displayDevice,
+                       ui::ColorMode* outMode,
+                       ui::Dataspace* outDataSpace) const;
 
     mat4 computeSaturationMatrix() const;
 
@@ -654,6 +671,7 @@ private:
     void doComposition();
     void doDebugFlashRegions();
     void doTracing(const char* where);
+    void logLayerStats();
     void doDisplayComposition(const sp<const DisplayDevice>& displayDevice, const Region& dirtyRegion);
 
     // compose surfaces for display hw. this fails if using GL and the surface
@@ -703,7 +721,8 @@ private:
     void listLayersLocked(const Vector<String16>& args, size_t& index, String8& result) const;
     void dumpStatsLocked(const Vector<String16>& args, size_t& index, String8& result) const;
     void clearStatsLocked(const Vector<String16>& args, size_t& index, String8& result);
-    void dumpAllLocked(const Vector<String16>& args, size_t& index, String8& result) const;
+    void dumpAllLocked(const Vector<String16>& args, size_t& index, String8& result,
+                                                                 bool enableRegionDump) const;
     bool startDdmConnection();
     void appendSfConfigString(String8& result) const;
     void checkScreenshot(size_t w, size_t s, size_t h, void const* vaddr,
@@ -712,6 +731,7 @@ private:
     void logFrameStats();
 
     void dumpStaticScreenStats(String8& result) const;
+    virtual void dumpDrawCycle(bool /* prePrepare */ ) { }
     // Not const because each Layer needs to query Fences and cache timestamps.
     void dumpFrameEventsLocked(String8& result);
 
@@ -719,12 +739,12 @@ private:
             std::vector<OccupancyTracker::Segment>&& history);
     void dumpBufferingStats(String8& result) const;
     void dumpWideColorInfo(String8& result) const;
-    LayersProto dumpProtoInfo(LayerVector::StateSet stateSet) const;
+    LayersProto dumpProtoInfo(LayerVector::StateSet stateSet, bool enableRegionDump = true) const;
+    LayersProto dumpVisibleLayersProtoInfo(int32_t hwcId) const;
 
     bool isLayerTripleBufferingDisabled() const {
         return this->mLayerTripleBufferingDisabled;
     }
-    status_t doDump(int fd, const Vector<String16>& args, bool asProto);
 
     /* ------------------------------------------------------------------------
      * VrFlinger
@@ -770,6 +790,8 @@ private:
     std::unique_ptr<EventControlThread> mEventControlThread;
     sp<IBinder> mBuiltinDisplays[DisplayDevice::NUM_BUILTIN_DISPLAY_TYPES];
 
+    VSyncModulator mVsyncModulator;
+
     // Can only accessed from the main thread, these members
     // don't need synchronization
     State mDrawingState{LayerVector::StateSet::Drawing};
@@ -806,6 +828,7 @@ private:
     std::unique_ptr<SurfaceInterceptor> mInterceptor =
             std::make_unique<impl::SurfaceInterceptor>(this);
     SurfaceTracing mTracing;
+    LayerStats mLayerStats;
     bool mUseHwcVirtualDisplays = false;
 
     // Restrict layers to use two buffers in their bufferqueues.
@@ -844,7 +867,6 @@ private:
 
     size_t mNumLayers;
 
-
     // Verify that transaction is being called by an approved process:
     // either AID_GRAPHICS or AID_SYSTEM.
     status_t CheckTransactCodeCredentials(uint32_t code);
@@ -854,8 +876,12 @@ private:
     static bool useVrFlinger;
     std::thread::id mMainThreadId;
 
-    float mSaturation = 1.0f;
-    bool mForceNativeColorMode = false;
+    DisplayColorSetting mDisplayColorSetting = DisplayColorSetting::MANAGED;
+    // Applied on sRGB layers when the render intent is non-colorimetric.
+    mat4 mLegacySrgbSaturationMatrix;
+    // Applied globally.
+    float mGlobalSaturationFactor = 1.0f;
+    bool mBuiltinDisplaySupportsEnhance = false;
 
     using CreateBufferQueueFunction =
             std::function<void(sp<IGraphicBufferProducer>* /* outProducer */,

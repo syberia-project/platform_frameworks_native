@@ -30,7 +30,7 @@
 #include <ui/FrameStats.h>
 #include <ui/PixelFormat.h>
 #include <ui/GraphicBuffer.h>
-#include <ui/GraphicsTypes.h>
+#include <ui/GraphicTypes.h>
 
 #include <vector>
 
@@ -61,6 +61,11 @@ public:
     enum {
         eSynchronous = 0x01,
         eAnimation   = 0x02,
+
+        // Indicates that this transaction will likely result in a lot of layers being composed, and
+        // thus, SurfaceFlinger should wake-up earlier to avoid missing frame deadlines. In this
+        // case SurfaceFlinger will wake up at (sf vsync offset - debug.sf.early_phase_offset_ns)
+        eEarlyWakeup = 0x04
     };
 
     enum {
@@ -161,10 +166,10 @@ public:
     virtual status_t setActiveConfig(const sp<IBinder>& display, int id) = 0;
 
     virtual status_t getDisplayColorModes(const sp<IBinder>& display,
-            Vector<ColorMode>* outColorModes) = 0;
-    virtual ColorMode getActiveColorMode(const sp<IBinder>& display) = 0;
+            Vector<ui::ColorMode>* outColorModes) = 0;
+    virtual ui::ColorMode getActiveColorMode(const sp<IBinder>& display) = 0;
     virtual status_t setActiveColorMode(const sp<IBinder>& display,
-            ColorMode colorMode) = 0;
+            ui::ColorMode colorMode) = 0;
 
     /* Capture the specified screen. requires READ_FRAME_BUFFER permission
      * This function will fail if there is a secure window on screen.

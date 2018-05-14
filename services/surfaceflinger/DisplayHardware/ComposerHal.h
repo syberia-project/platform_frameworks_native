@@ -24,10 +24,12 @@
 #include <vector>
 
 #include <android/frameworks/vr/composer/1.0/IVrComposerClient.h>
+#include <android/hardware/graphics/common/1.1/types.h>
 #include <android/hardware/graphics/composer/2.2/IComposer.h>
 #include <android/hardware/graphics/composer/2.2/IComposerClient.h>
 #include <composer-command-buffer/2.2/ComposerCommandBuffer.h>
 #include <gui/HdrMetadata.h>
+#include <math/mat4.h>
 #include <ui/GraphicBuffer.h>
 #include <utils/StrongPointer.h>
 
@@ -35,31 +37,35 @@ namespace android {
 
 namespace Hwc2 {
 
-using android::frameworks::vr::composer::V1_0::IVrComposerClient;
+using frameworks::vr::composer::V1_0::IVrComposerClient;
 
-using android::hardware::graphics::common::V1_0::ColorMode;
-using android::hardware::graphics::common::V1_0::ColorTransform;
-using android::hardware::graphics::common::V1_0::Dataspace;
-using android::hardware::graphics::common::V1_0::Hdr;
-using android::hardware::graphics::common::V1_0::PixelFormat;
-using android::hardware::graphics::common::V1_0::Transform;
+namespace types = hardware::graphics::common;
 
-using android::hardware::graphics::composer::V2_1::Config;
-using android::hardware::graphics::composer::V2_1::Display;
-using android::hardware::graphics::composer::V2_1::Error;
-using android::hardware::graphics::composer::V2_1::IComposer;
-using android::hardware::graphics::composer::V2_1::IComposerCallback;
-using android::hardware::graphics::composer::V2_1::Layer;
-using android::hardware::graphics::composer::V2_2::IComposerClient;
+namespace V2_1 = hardware::graphics::composer::V2_1;
+namespace V2_2 = hardware::graphics::composer::V2_2;
 
-using android::hardware::graphics::composer::V2_2::CommandReaderBase;
-using android::hardware::graphics::composer::V2_2::CommandWriterBase;
+using types::V1_0::ColorTransform;
+using types::V1_0::Hdr;
+using types::V1_0::Transform;
 
-using android::hardware::kSynchronizedReadWrite;
-using android::hardware::MessageQueue;
-using android::hardware::MQDescriptorSync;
-using android::hardware::hidl_vec;
-using android::hardware::hidl_handle;
+using types::V1_1::ColorMode;
+using types::V1_1::Dataspace;
+using types::V1_1::PixelFormat;
+using types::V1_1::RenderIntent;
+
+using V2_1::Config;
+using V2_1::Display;
+using V2_1::Error;
+using V2_1::IComposerCallback;
+using V2_1::Layer;
+
+using V2_2::CommandReaderBase;
+using V2_2::CommandWriterBase;
+using V2_2::IComposer;
+using V2_2::IComposerClient;
+
+using PerFrameMetadata = IComposerClient::PerFrameMetadata;
+using PerFrameMetadataKey = IComposerClient::PerFrameMetadataKey;
 
 class Composer {
 public:
@@ -113,9 +119,6 @@ public:
                                      float* outMaxLuminance, float* outMaxAverageLuminance,
                                      float* outMinLuminance) = 0;
 
-    virtual Error getPerFrameMetadataKeys(
-            Display display, std::vector<IComposerClient::PerFrameMetadataKey>* outKeys) = 0;
-
     virtual Error getReleaseFences(Display display, std::vector<Layer>* outLayers,
                                    std::vector<int>* outReleaseFences) = 0;
 
@@ -131,7 +134,7 @@ public:
     virtual Error setClientTarget(Display display, uint32_t slot, const sp<GraphicBuffer>& target,
                                   int acquireFence, Dataspace dataspace,
                                   const std::vector<IComposerClient::Rect>& damage) = 0;
-    virtual Error setColorMode(Display display, ColorMode mode) = 0;
+    virtual Error setColorMode(Display display, ColorMode mode, RenderIntent renderIntent) = 0;
     virtual Error setColorTransform(Display display, const float* matrix, ColorTransform hint) = 0;
     virtual Error setOutputBuffer(Display display, const native_handle_t* buffer,
                                   int releaseFence) = 0;
@@ -160,8 +163,6 @@ public:
     virtual Error setLayerCompositionType(Display display, Layer layer,
                                           IComposerClient::Composition type) = 0;
     virtual Error setLayerDataspace(Display display, Layer layer, Dataspace dataspace) = 0;
-    virtual Error setLayerHdrMetadata(Display display, Layer layer,
-                                      const HdrMetadata& metadata) = 0;
     virtual Error setLayerDisplayFrame(Display display, Layer layer,
                                        const IComposerClient::Rect& frame) = 0;
     virtual Error setLayerPlaneAlpha(Display display, Layer layer, float alpha) = 0;
@@ -174,6 +175,16 @@ public:
                                         const std::vector<IComposerClient::Rect>& visible) = 0;
     virtual Error setLayerZOrder(Display display, Layer layer, uint32_t z) = 0;
     virtual Error setLayerInfo(Display display, Layer layer, uint32_t type, uint32_t appId) = 0;
+
+    // Composer HAL 2.2
+    virtual Error setLayerPerFrameMetadata(
+            Display display, Layer layer,
+            const std::vector<IComposerClient::PerFrameMetadata>& perFrameMetadatas) = 0;
+    virtual Error getPerFrameMetadataKeys(
+            Display display, std::vector<IComposerClient::PerFrameMetadataKey>* outKeys) = 0;
+    virtual Error getRenderIntents(Display display, ColorMode colorMode,
+            std::vector<RenderIntent>* outRenderIntents) = 0;
+    virtual Error getDataspaceSaturationMatrix(Dataspace dataspace, mat4* outMatrix) = 0;
 };
 
 namespace impl {
@@ -305,9 +316,6 @@ public:
     Error getHdrCapabilities(Display display, std::vector<Hdr>* outTypes, float* outMaxLuminance,
                              float* outMaxAverageLuminance, float* outMinLuminance) override;
 
-    Error getPerFrameMetadataKeys(
-            Display display, std::vector<IComposerClient::PerFrameMetadataKey>* outKeys) override;
-
     Error getReleaseFences(Display display, std::vector<Layer>* outLayers,
                            std::vector<int>* outReleaseFences) override;
 
@@ -323,7 +331,7 @@ public:
     Error setClientTarget(Display display, uint32_t slot, const sp<GraphicBuffer>& target,
                           int acquireFence, Dataspace dataspace,
                           const std::vector<IComposerClient::Rect>& damage) override;
-    Error setColorMode(Display display, ColorMode mode) override;
+    Error setColorMode(Display display, ColorMode mode, RenderIntent renderIntent) override;
     Error setColorTransform(Display display, const float* matrix, ColorTransform hint) override;
     Error setOutputBuffer(Display display, const native_handle_t* buffer,
                           int releaseFence) override;
@@ -349,7 +357,6 @@ public:
     Error setLayerCompositionType(Display display, Layer layer,
                                   IComposerClient::Composition type) override;
     Error setLayerDataspace(Display display, Layer layer, Dataspace dataspace) override;
-    Error setLayerHdrMetadata(Display display, Layer layer, const HdrMetadata& metadata) override;
     Error setLayerDisplayFrame(Display display, Layer layer,
                                const IComposerClient::Rect& frame) override;
     Error setLayerPlaneAlpha(Display display, Layer layer, float alpha) override;
@@ -362,6 +369,16 @@ public:
                                 const std::vector<IComposerClient::Rect>& visible) override;
     Error setLayerZOrder(Display display, Layer layer, uint32_t z) override;
     Error setLayerInfo(Display display, Layer layer, uint32_t type, uint32_t appId) override;
+
+    // Composer HAL 2.2
+    Error setLayerPerFrameMetadata(
+            Display display, Layer layer,
+            const std::vector<IComposerClient::PerFrameMetadata>& perFrameMetadatas) override;
+    Error getPerFrameMetadataKeys(
+            Display display, std::vector<IComposerClient::PerFrameMetadataKey>* outKeys) override;
+    Error getRenderIntents(Display display, ColorMode colorMode,
+            std::vector<RenderIntent>* outRenderIntents) override;
+    Error getDataspaceSaturationMatrix(Dataspace dataspace, mat4* outMatrix) override;
 
 private:
     class CommandWriter : public CommandWriterBase {
@@ -385,8 +402,9 @@ private:
     // this function to execute the command queue.
     Error execute();
 
-    sp<IComposer> mComposer;
-    sp<hardware::graphics::composer::V2_1::IComposerClient> mClient;
+    sp<V2_1::IComposer> mComposer;
+
+    sp<V2_1::IComposerClient> mClient;
     sp<IComposerClient> mClient_2_2;
 
     // 64KiB minus a small space for metadata such as read/write pointers

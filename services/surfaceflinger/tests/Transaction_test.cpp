@@ -1008,6 +1008,32 @@ TEST_F(LayerTransactionTest, SetColorWithAlpha) {
                               tolerance);
 }
 
+TEST_F(LayerTransactionTest, SetColorWithParentAlpha_Bug74220420) {
+    sp<SurfaceControl> bufferLayer;
+    sp<SurfaceControl> parentLayer;
+    sp<SurfaceControl> colorLayer;
+    ASSERT_NO_FATAL_FAILURE(bufferLayer = createLayer("test bg", 32, 32));
+    ASSERT_NO_FATAL_FAILURE(parentLayer = createLayer("parentWithAlpha", 32, 32));
+    ASSERT_NO_FATAL_FAILURE(fillLayerColor(bufferLayer, Color::RED));
+    ASSERT_NO_FATAL_FAILURE(colorLayer = createLayer(
+            "childWithColor", 32, 32, ISurfaceComposerClient::eFXSurfaceColor));
+
+    const half3 color(15.0f / 255.0f, 51.0f / 255.0f, 85.0f / 255.0f);
+    const float alpha = 0.25f;
+    const ubyte3 expected((vec3(color) * alpha + vec3(1.0f, 0.0f, 0.0f) * (1.0f - alpha)) * 255.0f);
+    // this is handwavy, but the precision loss scaled by 255 (8-bit per
+    // channel) should be less than one
+    const uint8_t tolerance = 1;
+    Transaction()
+            .reparent(colorLayer, parentLayer->getHandle())
+            .setColor(colorLayer, color)
+            .setAlpha(parentLayer, alpha)
+            .setLayer(parentLayer, mLayerZBase + 1)
+            .apply();
+    screenshot()->expectColor(Rect(0, 0, 32, 32), {expected.r, expected.g, expected.b, 255},
+                              tolerance);
+}
+
 TEST_F(LayerTransactionTest, SetColorWithBuffer) {
     sp<SurfaceControl> bufferLayer;
     ASSERT_NO_FATAL_FAILURE(bufferLayer = createLayer("test", 32, 32));
@@ -2332,6 +2358,76 @@ TEST_F(ScreenCaptureTest, CaptureLayerChildOnly) {
     mCapture->expectChildColor(0, 0);
 }
 
+TEST_F(ScreenCaptureTest, CaptureTransparent) {
+    sp<SurfaceControl> child =
+            mComposerClient->createSurface(String8("Child surface"), 10, 10, PIXEL_FORMAT_RGBA_8888,
+                                           0, mFGSurfaceControl.get());
+
+    fillSurfaceRGBA8(child, 200, 200, 200);
+
+    SurfaceComposerClient::Transaction().show(child).apply(true);
+
+    auto childHandle = child->getHandle();
+
+    // Captures child
+    ScreenCapture::captureLayers(&mCapture, childHandle, {0, 0, 10, 20});
+    mCapture->expectColor(Rect(0, 0, 9, 9), {200, 200, 200, 255});
+    // Area outside of child's bounds is transparent.
+    mCapture->expectColor(Rect(0, 10, 9, 19), {0, 0, 0, 0});
+}
+
+TEST_F(ScreenCaptureTest, DontCaptureRelativeOutsideTree) {
+    auto fgHandle = mFGSurfaceControl->getHandle();
+
+    sp<SurfaceControl> child =
+            mComposerClient->createSurface(String8("Child surface"), 10, 10, PIXEL_FORMAT_RGBA_8888,
+                                           0, mFGSurfaceControl.get());
+    sp<SurfaceControl> relative = mComposerClient->createSurface(String8("Relative surface"), 10,
+                                                                 10, PIXEL_FORMAT_RGBA_8888, 0);
+    fillSurfaceRGBA8(child, 200, 200, 200);
+    fillSurfaceRGBA8(relative, 100, 100, 100);
+
+    SurfaceComposerClient::Transaction()
+            .show(child)
+            // Set relative layer above fg layer so should be shown above when computing all layers.
+            .setRelativeLayer(relative, fgHandle, 1)
+            .show(relative)
+            .apply(true);
+
+    // Captures mFGSurfaceControl layer and its child. Relative layer shouldn't be captured.
+    ScreenCapture::captureLayers(&mCapture, fgHandle);
+    mCapture->expectFGColor(10, 10);
+    mCapture->expectChildColor(0, 0);
+}
+
+TEST_F(ScreenCaptureTest, CaptureRelativeInTree) {
+    auto fgHandle = mFGSurfaceControl->getHandle();
+
+    sp<SurfaceControl> child =
+            mComposerClient->createSurface(String8("Child surface"), 10, 10, PIXEL_FORMAT_RGBA_8888,
+                                           0, mFGSurfaceControl.get());
+    sp<SurfaceControl> relative =
+            mComposerClient->createSurface(String8("Relative surface"), 10, 10,
+                                           PIXEL_FORMAT_RGBA_8888, 0, mFGSurfaceControl.get());
+    fillSurfaceRGBA8(child, 200, 200, 200);
+    fillSurfaceRGBA8(relative, 100, 100, 100);
+
+    SurfaceComposerClient::Transaction()
+            .show(child)
+            // Set relative layer below fg layer but relative to child layer so it should be shown
+            // above child layer.
+            .setLayer(relative, -1)
+            .setRelativeLayer(relative, child->getHandle(), 1)
+            .show(relative)
+            .apply(true);
+
+    // Captures mFGSurfaceControl layer and its children. Relative layer is a child of fg so its
+    // relative value should be taken into account, placing it above child layer.
+    ScreenCapture::captureLayers(&mCapture, fgHandle);
+    mCapture->expectFGColor(10, 10);
+    // Relative layer is showing on top of child layer
+    mCapture->expectColor(Rect(0, 0, 9, 9), {100, 100, 100, 255});
+}
 
 // In the following tests we verify successful skipping of a parent layer,
 // so we use the same verification logic and only change how we mutate

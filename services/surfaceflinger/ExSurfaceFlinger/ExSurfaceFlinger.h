@@ -44,19 +44,35 @@ protected:
     friend class Layer;
     virtual void handleDPTransactionIfNeeded(
                      const Vector<DisplayState>& displays);
+    virtual void setDisplayAnimating(const sp<const DisplayDevice>& hw,
+                                     const int32_t& dpy);
     virtual bool IsHWCDisabled() { return mDebugDisableHWC; }
     virtual ~ExSurfaceFlinger();
 
     bool mDebugLogs;
     bool isDebug() { return mDebugLogs; }
     bool mDisableExtAnimation;
+    bool mAnimating = false;
 
     static bool sAllowHDRFallBack;
     static bool AllowHDRFallBack() { return sAllowHDRFallBack; }
     Mutex mExtAnimationLock;
     Condition mExtAnimationCond;
+    static bool regionDump;
+    virtual status_t doDump(int fd, const Vector<String16>& args, bool asProto);
+    virtual void dumpDrawCycle(bool prePrepare);
+
+    struct {
+      Mutex lock;
+      const char *name = "/data/misc/display/dumpsys.txt";
+      bool running = false;
+      bool noLimit = false;
+      bool replaceAfterCommit = false;
+      long int position = 0;
+    } mFileDump;
+
 };
 
 }; //namespace android
 
-#endif //ANDROID_EX_SURFACE_FLINGER_H
+#endif // ANDROID_EX_SURFACE_FLINGER_H

@@ -44,21 +44,20 @@ ColorLayer::ColorLayer(SurfaceFlinger* flinger, const sp<Client>& client, const 
 
 void ColorLayer::onDraw(const RenderArea& renderArea, const Region& /* clip */,
                         bool useIdentityTransform) const {
-    const State& s(getDrawingState());
-    if (s.color.a > 0) {
+    half4 color = getColor();
+    if (color.a > 0) {
         Mesh mesh(Mesh::TRIANGLE_FAN, 4, 2);
         computeGeometry(renderArea, mesh, useIdentityTransform);
         auto& engine(mFlinger->getRenderEngine());
         engine.setupLayerBlending(getPremultipledAlpha(), false /* opaque */,
-                                  true /* disableTexture */, s.color);
+                                  true /* disableTexture */, color);
         engine.drawMesh(mesh);
         engine.disableBlending();
     }
 }
 
 bool ColorLayer::isVisible() const {
-    const Layer::State& s(getDrawingState());
-    return !isHiddenByPolicy() && s.color.a;
+    return !isHiddenByPolicy() && getAlpha();
 }
 
 void ColorLayer::setPerFrameData(const sp<const DisplayDevice>& displayDevice) {

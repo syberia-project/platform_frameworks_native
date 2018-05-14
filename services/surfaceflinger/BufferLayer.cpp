@@ -198,7 +198,8 @@ void BufferLayer::onDraw(const RenderArea& renderArea, const Region& clip,
         // is probably going to have something visibly wrong.
     }
 
-    bool blackOutLayer = isProtected() || (isSecure() && !renderArea.isSecure()) || isHDRLayer();
+    bool blackOutLayer = isProtected() || (isSecure() && !renderArea.isSecure()) ||
+                         (isHDRLayer() && !isColorInversion());
 
     auto& engine(mFlinger->getRenderEngine());
 
@@ -473,9 +474,14 @@ Region BufferLayer::latchBuffer(bool& recomputeVisibleRegions, nsecs_t latchTime
 
         // Remove any stale buffers that have been dropped during
         // updateTexImage
-        while (mQueueItems[0].mFrameNumber != currentFrameNumber) {
+        while (mQueuedFrames > 0 && mQueueItems[0].mFrameNumber != currentFrameNumber) {
             mQueueItems.removeAt(0);
             android_atomic_dec(&mQueuedFrames);
+        }
+
+        if (mQueuedFrames == 0) {
+            ALOGE("[%s] mQueuedFrames is zero !!!", mName.string());
+            return outDirtyRegion;
         }
 
         mQueueItems.removeAt(0);
@@ -515,7 +521,27 @@ Region BufferLayer::latchBuffer(bool& recomputeVisibleRegions, nsecs_t latchTime
         recomputeVisibleRegions = true;
     }
 
-    setDataSpace(mConsumer->getCurrentDataSpace());
+    // Dataspace::V0_SRGB and Dataspace::V0_SRGB_LINEAR are not legacy
+    // data space, however since framework doesn't distinguish them out of
+    // legacy SRGB, we have to treat them as the same for now.
+    // UNKNOWN is treated as legacy SRGB when the connected api is EGL.
+    ui::Dataspace dataSpace = mConsumer->getCurrentDataSpace();
+    switch (dataSpace) {
+        case ui::Dataspace::V0_SRGB:
+            dataSpace = ui::Dataspace::SRGB;
+            break;
+        case ui::Dataspace::V0_SRGB_LINEAR:
+            dataSpace = ui::Dataspace::SRGB_LINEAR;
+            break;
+        case ui::Dataspace::UNKNOWN:
+            if (mConsumer->getCurrentApi() == NATIVE_WINDOW_API_EGL) {
+                dataSpace = ui::Dataspace::SRGB;
+            }
+            break;
+        default:
+            break;
+    }
+    setDataSpace(dataSpace);
 
     Rect crop(mConsumer->getCurrentCrop());
     const uint32_t transform(mConsumer->getCurrentTransform());
@@ -630,7 +656,7 @@ void BufferLayer::setPerFrameData(const sp<const DisplayDevice>& displayDevice) 
     }
 
     const HdrMetadata& metadata = mConsumer->getCurrentHdrMetadata();
-    error = hwcLayer->setHdrMetadata(metadata);
+    error = hwcLayer->setPerFrameMetadata(displayDevice->getSupportedPerFrameMetadata(), metadata);
     if (error != HWC2::Error::None && error != HWC2::Error::Unsupported) {
         ALOGE("[%s] Failed to set hdrMetadata: %s (%d)", mName.string(),
               to_string(error).c_str(), static_cast<int32_t>(error));
@@ -778,6 +804,7 @@ bool BufferLayer::getOpacityForFormat(uint32_t format) {
 }
 
 void BufferLayer::drawWithOpenGL(const RenderArea& renderArea, bool useIdentityTransform) const {
+    ATRACE_CALL();
     const State& s(getDrawingState());
 
     computeGeometry(renderArea, getBE().mMesh, useIdentityTransform);
@@ -829,7 +856,7 @@ void BufferLayer::drawWithOpenGL(const RenderArea& renderArea, bool useIdentityT
                               getColor());
     engine.setSourceDataSpace(mCurrentState.dataSpace);
 
-    if (mCurrentState.dataSpace == HAL_DATASPACE_BT2020_ITU_PQ &&
+    if (mCurrentState.dataSpace == ui::Dataspace::BT2020_ITU_PQ &&
         mConsumer->getCurrentApi() == NATIVE_WINDOW_API_MEDIA &&
         getBE().compositionInfo.mBuffer->getPixelFormat() == HAL_PIXEL_FORMAT_RGBA_1010102) {
         engine.setSourceY410BT2020(true);

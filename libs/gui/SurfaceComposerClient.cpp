@@ -43,6 +43,8 @@
 #include <private/gui/ComposerService.h>
 
 namespace android {
+
+using ui::ColorMode;
 // ---------------------------------------------------------------------------
 
 ANDROID_SINGLETON_STATIC_INSTANCE(ComposerService);
@@ -99,7 +101,8 @@ void ComposerService::composerServiceDied()
 SurfaceComposerClient::Transaction::Transaction(const Transaction& other) :
     mForceSynchronous(other.mForceSynchronous),
     mTransactionNestCount(other.mTransactionNestCount),
-    mAnimation(other.mAnimation) {
+    mAnimation(other.mAnimation),
+    mEarlyWakeup(other.mEarlyWakeup) {
     mDisplayStates = other.mDisplayStates;
     mComposerStates = other.mComposerStates;
 }
@@ -155,9 +158,13 @@ status_t SurfaceComposerClient::Transaction::apply(bool synchronous) {
     if (mAnimation) {
         flags |= ISurfaceComposer::eAnimation;
     }
+    if (mEarlyWakeup) {
+        flags |= ISurfaceComposer::eEarlyWakeup;
+    }
 
     mForceSynchronous = false;
     mAnimation = false;
+    mEarlyWakeup = false;
 
     sf->setTransactionState(composerStates, displayStates, flags);
     mStatus = NO_ERROR;
@@ -181,6 +188,10 @@ sp<IBinder> SurfaceComposerClient::getBuiltInDisplay(int32_t id) {
 
 void SurfaceComposerClient::Transaction::setAnimationTransaction() {
     mAnimation = true;
+}
+
+void SurfaceComposerClient::Transaction::setEarlyWakeup() {
+    mEarlyWakeup = true;
 }
 
 layer_state_t* SurfaceComposerClient::Transaction::getLayerState(const sp<SurfaceControl>& sc) {

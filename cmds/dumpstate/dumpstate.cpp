@@ -32,14 +32,20 @@
 #include <sys/time.h>
 #include <sys/wait.h>
 #include <unistd.h>
+
+#include <chrono>
+#include <functional>
+#include <future>
 #include <memory>
 #include <regex>
 #include <set>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <android-base/file.h>
 #include <android-base/properties.h>
+#include <android-base/scopeguard.h>
 #include <android-base/stringprintf.h>
 #include <android-base/strings.h>
 #include <android-base/unique_fd.h>
@@ -53,6 +59,7 @@
 #include <private/android_filesystem_config.h>
 #include <private/android_logger.h>
 #include <serviceutils/PriorityDumper.h>
+#include <utils/StrongPointer.h>
 #include "DumpstateInternal.h"
 #include "DumpstateSectionReporter.h"
 #include "DumpstateService.h"
@@ -97,6 +104,7 @@ void add_mountinfo();
 #define RAFT_DIR "/data/misc/raft"
 #define RECOVERY_DIR "/cache/recovery"
 #define RECOVERY_DATA_DIR "/data/misc/recovery"
+#define UPDATE_ENGINE_LOG_DIR "/data/misc/update_engine_log"
 #define LOGPERSIST_DATA_DIR "/data/misc/logd"
 #define PROFILE_DATA_DIR_CUR "/data/misc/profiles/cur"
 #define PROFILE_DATA_DIR_REF "/data/misc/profiles/ref"
@@ -1229,7 +1237,6 @@ static void RunDumpsysNormal() {
 }
 
 static void DumpHals() {
-    using android::sp;
     using android::hidl::manager::V1_0::IServiceManager;
     using android::hardware::defaultServiceManager;
 
@@ -1425,19 +1432,40 @@ static void dumpstate() {
     printf("== Running Application Activities\n");
     printf("========================================================\n");
 
-    RunDumpsys("APP ACTIVITIES", {"activity", "-v", "all"});
+    // The following dumpsys internally collects output from running apps, so it can take a long
+    // time. So let's extend the timeout.
+
+    const CommandOptions DUMPSYS_COMPONENTS_OPTIONS = CommandOptions::WithTimeout(60).Build();
+
+    RunDumpsys("APP ACTIVITIES", {"activity", "-v", "all"}, DUMPSYS_COMPONENTS_OPTIONS);
 
     printf("========================================================\n");
-    printf("== Running Application Services\n");
+    printf("== Running Application Services (platform)\n");
     printf("========================================================\n");
 
-    RunDumpsys("APP SERVICES", {"activity", "service", "all"});
+    RunDumpsys("APP SERVICES PLATFORM", {"activity", "service", "all-platform"},
+            DUMPSYS_COMPONENTS_OPTIONS);
 
     printf("========================================================\n");
-    printf("== Running Application Providers\n");
+    printf("== Running Application Services (non-platform)\n");
     printf("========================================================\n");
 
-    RunDumpsys("APP PROVIDERS", {"activity", "provider", "all"});
+    RunDumpsys("APP SERVICES NON-PLATFORM", {"activity", "service", "all-non-platform"},
+            DUMPSYS_COMPONENTS_OPTIONS);
+
+    printf("========================================================\n");
+    printf("== Running Application Providers (platform)\n");
+    printf("========================================================\n");
+
+    RunDumpsys("APP PROVIDERS PLATFORM", {"activity", "provider", "all-platform"},
+            DUMPSYS_COMPONENTS_OPTIONS);
+
+    printf("========================================================\n");
+    printf("== Running Application Providers (non-platform)\n");
+    printf("========================================================\n");
+
+    RunDumpsys("APP PROVIDERS NON-PLATFORM", {"activity", "provider", "all-non-platform"},
+            DUMPSYS_COMPONENTS_OPTIONS);
 
     printf("========================================================\n");
     printf("== Dropbox crashes\n");
@@ -1489,18 +1517,16 @@ static void DumpstateTelephonyOnly() {
                SEC_TO_MSEC(10));
     RunDumpsys("DUMPSYS", {"carrier_config"}, CommandOptions::WithTimeout(90).Build(),
                SEC_TO_MSEC(10));
+    RunDumpsys("DUMPSYS", {"wifi"}, CommandOptions::WithTimeout(90).Build(),
+               SEC_TO_MSEC(10));
+    RunDumpsys("BATTERYSTATS", {"batterystats"}, CommandOptions::WithTimeout(90).Build(),
+               SEC_TO_MSEC(10));
 
     printf("========================================================\n");
     printf("== Running Application Services\n");
     printf("========================================================\n");
 
     RunDumpsys("TELEPHONY SERVICES", {"activity", "service", "TelephonyDebugService"});
-
-    printf("========================================================\n");
-    printf("== Checkins\n");
-    printf("========================================================\n");
-
-    RunDumpsys("CHECKIN BATTERYSTATS", {"batterystats", "-c"});
 
     printf("========================================================\n");
     printf("== dumpstate: done (id %d)\n", ds.id_);
@@ -1533,77 +1559,112 @@ void Dumpstate::DumpstateBoard() {
     printf("== Board\n");
     printf("========================================================\n");
 
-    ::android::sp<IDumpstateDevice> dumpstate_device(IDumpstateDevice::getService());
-    if (dumpstate_device == nullptr) {
-        MYLOGE("No IDumpstateDevice implementation\n");
-        return;
-    }
-
     if (!IsZipping()) {
         MYLOGD("Not dumping board info because it's not a zipped bugreport\n");
         return;
     }
 
-    std::string path[NUM_OF_DUMPS];
-    android::base::unique_fd fd[NUM_OF_DUMPS];
-    int numFds = 0;
-
+    std::vector<std::string> paths;
+    std::vector<android::base::ScopeGuard<std::function<void()>>> remover;
     for (int i = 0; i < NUM_OF_DUMPS; i++) {
-        path[i] = kDumpstateBoardPath + kDumpstateBoardFiles[i];
-        MYLOGI("Calling IDumpstateDevice implementation using path %s\n", path[i].c_str());
-
-        fd[i] = android::base::unique_fd(
-            TEMP_FAILURE_RETRY(open(path[i].c_str(),
-            O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC | O_NOFOLLOW,
-            S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH)));
-        if (fd[i] < 0) {
-            MYLOGE("Could not open file %s: %s\n", path[i].c_str(), strerror(errno));
-            return;
-        } else {
-            numFds++;
-        }
+        paths.emplace_back(kDumpstateBoardPath + kDumpstateBoardFiles[i]);
+        remover.emplace_back(android::base::make_scope_guard(std::bind(
+            [](std::string path) {
+                if (remove(path.c_str()) != 0 && errno != ENOENT) {
+                    MYLOGE("Could not remove(%s): %s\n", path.c_str(), strerror(errno));
+                }
+            },
+            paths[i])));
     }
 
-    native_handle_t *handle = native_handle_create(numFds, 0);
+    sp<IDumpstateDevice> dumpstate_device(IDumpstateDevice::getService());
+    if (dumpstate_device == nullptr) {
+        MYLOGE("No IDumpstateDevice implementation\n");
+        return;
+    }
+
+    using ScopedNativeHandle =
+            std::unique_ptr<native_handle_t, std::function<void(native_handle_t*)>>;
+    ScopedNativeHandle handle(native_handle_create(static_cast<int>(paths.size()), 0),
+                              [](native_handle_t* handle) {
+                                  native_handle_close(handle);
+                                  native_handle_delete(handle);
+                              });
     if (handle == nullptr) {
         MYLOGE("Could not create native_handle\n");
         return;
     }
 
-    for (int i = 0; i < numFds; i++) {
-        handle->data[i] = fd[i].release();
-    }
+    for (size_t i = 0; i < paths.size(); i++) {
+        MYLOGI("Calling IDumpstateDevice implementation using path %s\n", paths[i].c_str());
 
-    // TODO: need a timeout mechanism so dumpstate does not hang on device implementation call.
-    android::hardware::Return<void> status = dumpstate_device->dumpstateBoard(handle);
-    if (!status.isOk()) {
-        MYLOGE("dumpstateBoard failed: %s\n", status.description().c_str());
-        native_handle_close(handle);
-        native_handle_delete(handle);
-        return;
-    }
-
-    for (int i = 0; i < numFds; i++) {
-        struct stat s;
-        if (fstat(handle->data[i], &s) == -1) {
-            MYLOGE("Failed to fstat %s: %d\n", kDumpstateBoardFiles[i].c_str(), errno);
-        } else if (s.st_size > 0) {
-            AddZipEntry(kDumpstateBoardFiles[i], path[i]);
-        } else {
-            MYLOGE("Ignoring empty %s\n", kDumpstateBoardFiles[i].c_str());
+        android::base::unique_fd fd(TEMP_FAILURE_RETRY(
+            open(paths[i].c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC | O_NOFOLLOW,
+                 S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH)));
+        if (fd < 0) {
+            MYLOGE("Could not open file %s: %s\n", paths[i].c_str(), strerror(errno));
+            return;
         }
+        handle.get()->data[i] = fd.release();
+    }
+
+    // Given that bugreport is required to diagnose failures, it's better to
+    // set an arbitrary amount of timeout for IDumpstateDevice than to block the
+    // rest of bugreport. In the timeout case, we will kill dumpstate board HAL
+    // and grab whatever dumped
+    std::packaged_task<bool()>
+            dumpstate_task([paths, dumpstate_device, &handle]() -> bool {
+            android::hardware::Return<void> status = dumpstate_device->dumpstateBoard(handle.get());
+            if (!status.isOk()) {
+                MYLOGE("dumpstateBoard failed: %s\n", status.description().c_str());
+                return false;
+            }
+            return true;
+        });
+
+    auto result = dumpstate_task.get_future();
+    std::thread(std::move(dumpstate_task)).detach();
+
+    constexpr size_t timeout_sec = 30;
+    if (result.wait_for(std::chrono::seconds(timeout_sec)) != std::future_status::ready) {
+        MYLOGE("dumpstateBoard timed out after %zus, killing dumpstate vendor HAL\n", timeout_sec);
+        if (!android::base::SetProperty("ctl.interface_restart",
+                                        android::base::StringPrintf("%s/default",
+                                                                    IDumpstateDevice::descriptor))) {
+            MYLOGE("Couldn't restart dumpstate HAL\n");
+        }
+    }
+    // Wait some time for init to kill dumpstate vendor HAL
+    constexpr size_t killing_timeout_sec = 10;
+    if (result.wait_for(std::chrono::seconds(killing_timeout_sec)) != std::future_status::ready) {
+        MYLOGE("killing dumpstateBoard timed out after %zus, continue and "
+               "there might be racing in content\n", killing_timeout_sec);
+    }
+
+    auto file_sizes = std::make_unique<ssize_t[]>(paths.size());
+    for (size_t i = 0; i < paths.size(); i++) {
+        struct stat s;
+        if (fstat(handle.get()->data[i], &s) == -1) {
+            MYLOGE("Failed to fstat %s: %s\n", kDumpstateBoardFiles[i].c_str(),
+                   strerror(errno));
+            file_sizes[i] = -1;
+            continue;
+        }
+        file_sizes[i] = s.st_size;
+    }
+
+    for (size_t i = 0; i < paths.size(); i++) {
+        if (file_sizes[i] == -1) {
+            continue;
+        }
+        if (file_sizes[i] == 0) {
+            MYLOGE("Ignoring empty %s\n", kDumpstateBoardFiles[i].c_str());
+            continue;
+        }
+        AddZipEntry(kDumpstateBoardFiles[i], paths[i]);
     }
 
     printf("*** See dumpstate-board.txt entry ***\n");
-
-    native_handle_close(handle);
-    native_handle_delete(handle);
-
-    for (int i = 0; i < numFds; i++) {
-        if (remove(path[i].c_str()) != 0) {
-            MYLOGE("Could not remove(%s): %s\n", path[i].c_str(), strerror(errno));
-        }
-    }
 }
 
 static void ShowUsageAndExit(int exitCode = 1) {
@@ -2093,6 +2154,7 @@ int run_main(int argc, char* argv[]) {
 
         ds.AddDir(RECOVERY_DIR, true);
         ds.AddDir(RECOVERY_DATA_DIR, true);
+        ds.AddDir(UPDATE_ENGINE_LOG_DIR, true);
         ds.AddDir(LOGPERSIST_DATA_DIR, false);
         if (!PropertiesHelper::IsUserBuild()) {
             ds.AddDir(PROFILE_DATA_DIR_CUR, true);

@@ -14,9 +14,9 @@
      limitations under the License.
 -->
 
-<!-- These are the hardware components that all handheld devices
-     must include. Devices with optional hardware must also include extra
-     hardware files, per the comments below.
+<!-- These are the hardware components that all handheld devices except Android Go
+     must include, for Android Go devices include go_handheld_core_hardware.xml.
+     Devices with optional hardware must also include extra hardware files, per the comments below.
 
      Handheld devices include phones, mobile Internet devices (MIDs),
      Personal Media Players (PMPs), small tablets (7" or less), and similar

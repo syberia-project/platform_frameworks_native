@@ -16,6 +16,21 @@
 namespace android {
 namespace dvr {
 
+class BufferHubClient : public pdx::Client {
+ public:
+  BufferHubClient();
+  explicit BufferHubClient(pdx::LocalChannelHandle channel_handle);
+
+  bool IsValid() const;
+  pdx::LocalChannelHandle TakeChannelHandle();
+
+  using pdx::Client::Close;
+  using pdx::Client::GetChannel;
+  using pdx::Client::InvokeRemoteMethod;
+  using pdx::Client::IsConnected;
+  using pdx::Client::event_fd;
+};
+
 class BufferHubBuffer : public pdx::Client {
  public:
   using LocalHandle = pdx::LocalHandle;
