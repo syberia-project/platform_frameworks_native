@@ -52,7 +52,7 @@ public:
     /*
      * maps memory from ashmem, with the given name for debugging
      */
-    MemoryHeapBase(size_t size, uint32_t flags = 0, char const* name = NULL);
+    MemoryHeapBase(size_t size, uint32_t flags = 0, char const* name = nullptr);
 
     virtual ~MemoryHeapBase();
 
@@ -83,7 +83,7 @@ protected:
             MemoryHeapBase();
     // init() takes ownership of fd
     status_t init(int fd, void *base, int size,
-            int flags = 0, const char* device = NULL);
+            int flags = 0, const char* device = nullptr);
 
 private:
     status_t mapfd(int fd, size_t size, uint32_t offset = 0);

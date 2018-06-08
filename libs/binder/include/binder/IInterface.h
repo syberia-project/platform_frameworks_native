@@ -90,11 +90,11 @@ protected:
             const ::android::sp<::android::IBinder>& obj)               \
     {                                                                   \
         ::android::sp<I##INTERFACE> intr;                               \
-        if (obj != NULL) {                                              \
+        if (obj != nullptr) {                                              \
             intr = static_cast<I##INTERFACE*>(                          \
                 obj->queryLocalInterface(                               \
                         I##INTERFACE::descriptor).get());               \
-            if (intr == NULL) {                                         \
+            if (intr == nullptr) {                                         \
                 intr = new Bp##INTERFACE(obj);                          \
             }                                                           \
         }                                                               \
@@ -116,7 +116,7 @@ inline sp<IInterface> BnInterface<INTERFACE>::queryLocalInterface(
         const String16& _descriptor)
 {
     if (_descriptor == INTERFACE::descriptor) return this;
-    return NULL;
+    return nullptr;
 }
 
 template<typename INTERFACE>
