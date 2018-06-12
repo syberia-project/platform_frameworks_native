@@ -90,6 +90,16 @@ public:
     sp<Surface> getSurface(bool includeSurfaceControlHandle);
     bool isSameSurfaceControl(const sp<SurfaceControl>& surfaceControl) const;
 
+    /* QTI_BEGIN */
+    void qtiSetUndequeuedBufferCount(int count) {
+        mQtiNumUndequeued = count;
+    }
+
+    int qtiGetUndequeuedBufferCount() const {
+        return mQtiNumUndequeued;
+    }
+    /* QTI_END */
+
     void onFrameReplaced(const BufferItem& item) override;
     void onFrameAvailable(const BufferItem& item) override;
     void onFrameDequeued(const uint64_t) override;
@@ -172,6 +182,9 @@ private:
     // the max to be acquired
     int32_t mMaxAcquiredBuffers = 1;
 
+    /* QTI_BEGIN */
+    int mQtiNumUndequeued = 0;
+    /* QTI_END */
     int32_t mNumFrameAvailable GUARDED_BY(mMutex) = 0;
     int32_t mNumAcquired GUARDED_BY(mMutex) = 0;
 
