@@ -60,12 +60,14 @@ public:
     MOCK_METHOD1(setupLayerTexturing, void(const Texture&));
     MOCK_METHOD0(setupLayerBlackedOut, void());
     MOCK_METHOD4(setupFillWithColor, void(float, float, float, float));
-    MOCK_METHOD1(setupColorTransform, mat4(const mat4&));
+    MOCK_METHOD1(setupColorTransform, void(const mat4&));
+    MOCK_METHOD1(setSaturationMatrix, void(const mat4&));
     MOCK_METHOD0(disableTexturing, void());
     MOCK_METHOD0(disableBlending, void());
     MOCK_METHOD1(setSourceY410BT2020, void(bool));
     MOCK_METHOD1(setSourceDataSpace, void(ui::Dataspace));
     MOCK_METHOD1(setOutputDataSpace, void(ui::Dataspace));
+    MOCK_METHOD1(setDisplayMaxLuminance, void(const float));
     MOCK_METHOD2(bindNativeBufferAsFrameBuffer,
                  void(ANativeWindowBuffer*, RE::BindNativeBufferAsFramebuffer*));
     MOCK_METHOD1(unbindNativeBufferAsFrameBuffer, void(RE::BindNativeBufferAsFramebuffer*));

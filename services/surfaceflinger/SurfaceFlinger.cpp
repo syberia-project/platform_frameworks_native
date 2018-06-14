@@ -89,6 +89,8 @@
 #include <cutils/compiler.h>
 
 #include <android/hardware/configstore/1.0/ISurfaceFlingerConfigs.h>
+#include <android/hardware/configstore/1.1/ISurfaceFlingerConfigs.h>
+#include <android/hardware/configstore/1.1/types.h>
 #include <configstore/Utils.h>
 
 #include <layerproto/LayerProtoParser.h>
@@ -159,29 +161,18 @@ bool useTrebleTestingOverride() {
     return std::string(value) == "true";
 }
 
-DisplayColorSetting toDisplayColorSetting(int value) {
-    switch(value) {
-        case 0:
-            return DisplayColorSetting::MANAGED;
-        case 1:
-            return DisplayColorSetting::UNMANAGED;
-        case 2:
-            return DisplayColorSetting::ENHANCED;
-        default:
-            return DisplayColorSetting::MANAGED;
-    }
-}
-
 std::string decodeDisplayColorSetting(DisplayColorSetting displayColorSetting) {
     switch(displayColorSetting) {
         case DisplayColorSetting::MANAGED:
-            return std::string("Natural Mode");
+            return std::string("Managed");
         case DisplayColorSetting::UNMANAGED:
-            return std::string("Saturated Mode");
+            return std::string("Unmanaged");
         case DisplayColorSetting::ENHANCED:
-            return std::string("Auto Color Mode");
+            return std::string("Enhanced");
+        default:
+            return std::string("Unknown ") +
+                std::to_string(static_cast<int>(displayColorSetting));
     }
-    return std::string("Unknown Display Color Setting");
 }
 
 NativeWindowSurface::~NativeWindowSurface() = default;
@@ -245,7 +236,6 @@ SurfaceFlinger::SurfaceFlinger(SurfaceFlinger::SkipInitializationTag)
         mPrimaryDispSync("PrimaryDispSync"),
         mPrimaryHWVsyncEnabled(false),
         mHWVsyncAvailable(false),
-        mHasColorMatrix(false),
         mHasPoweredOff(false),
         mNumLayers(0),
         mVrFlingerRequestsDisplay(false),
@@ -284,6 +274,26 @@ SurfaceFlinger::SurfaceFlinger() : SurfaceFlinger(SkipInitialization) {
     hasWideColorDisplay =
             getBool<ISurfaceFlingerConfigs, &ISurfaceFlingerConfigs::hasWideColorDisplay>(false);
 
+    V1_1::DisplayOrientation primaryDisplayOrientation =
+        getDisplayOrientation< V1_1::ISurfaceFlingerConfigs, &V1_1::ISurfaceFlingerConfigs::primaryDisplayOrientation>(
+            V1_1::DisplayOrientation::ORIENTATION_0);
+
+    switch (primaryDisplayOrientation) {
+        case V1_1::DisplayOrientation::ORIENTATION_90:
+            mPrimaryDisplayOrientation = DisplayState::eOrientation90;
+            break;
+        case V1_1::DisplayOrientation::ORIENTATION_180:
+            mPrimaryDisplayOrientation = DisplayState::eOrientation180;
+            break;
+        case V1_1::DisplayOrientation::ORIENTATION_270:
+            mPrimaryDisplayOrientation = DisplayState::eOrientation270;
+            break;
+        default:
+            mPrimaryDisplayOrientation = DisplayState::eOrientationDefault;
+            break;
+    }
+    ALOGV("Primary Display Orientation is set to %2d.", mPrimaryDisplayOrientation);
+
     mPrimaryDispSync.init(SurfaceFlinger::hasSyncFramework, SurfaceFlinger::dispSyncPresentTimeOffset);
 
     // debugging stuff...
@@ -318,8 +328,7 @@ SurfaceFlinger::SurfaceFlinger() : SurfaceFlinger(SkipInitialization) {
     mLayerTripleBufferingDisabled = atoi(value);
     ALOGI_IF(mLayerTripleBufferingDisabled, "Disabling Triple Buffering");
 
-    // TODO (b/74616334): Reduce the default value once we isolate the leak
-    const size_t defaultListSize = 4 * MAX_LAYERS;
+    const size_t defaultListSize = MAX_LAYERS;
     auto listSize = property_get_int32("debug.sf.max_igbp_list_size", int32_t(defaultListSize));
     mMaxGraphicBufferProducerListSize = (listSize > 0) ? size_t(listSize) : defaultListSize;
 
@@ -638,14 +647,21 @@ void SurfaceFlinger::init() {
     mEventThreadSource =
             std::make_unique<DispSyncSource>(&mPrimaryDispSync, SurfaceFlinger::vsyncPhaseOffsetNs,
                                              true, "app");
-    mEventThread = std::make_unique<impl::EventThread>(mEventThreadSource.get(), *this, false,
+    mEventThread = std::make_unique<impl::EventThread>(mEventThreadSource.get(),
+                                                       [this]() { resyncWithRateLimit(); },
+                                                       impl::EventThread::InterceptVSyncsCallback(),
                                                        "appEventThread");
     mSfEventThreadSource =
             std::make_unique<DispSyncSource>(&mPrimaryDispSync,
                                              SurfaceFlinger::sfVsyncPhaseOffsetNs, true, "sf");
 
-    mSFEventThread = std::make_unique<impl::EventThread>(mSfEventThreadSource.get(), *this, true,
-                                                         "sfEventThread");
+    mSFEventThread =
+            std::make_unique<impl::EventThread>(mSfEventThreadSource.get(),
+                                                [this]() { resyncWithRateLimit(); },
+                                                [this](nsecs_t timestamp) {
+                                                    mInterceptor->saveVSyncEvent(timestamp);
+                                                },
+                                                "sfEventThread");
     mEventQueue->setEventThread(mSFEventThread.get());
     mVsyncModulator.setEventThread(mSFEventThread.get());
 
@@ -724,16 +740,17 @@ void SurfaceFlinger::init() {
 }
 
 void SurfaceFlinger::readPersistentProperties() {
+    Mutex::Autolock _l(mStateLock);
+
     char value[PROPERTY_VALUE_MAX];
 
     property_get("persist.sys.sf.color_saturation", value, "1.0");
     mGlobalSaturationFactor = atof(value);
+    updateColorMatrixLocked();
     ALOGV("Saturation is set to %.2f", mGlobalSaturationFactor);
 
     property_get("persist.sys.sf.native_mode", value, "0");
-    mDisplayColorSetting = toDisplayColorSetting(atoi(value));
-    ALOGV("Display Color Setting is set to %s.",
-          decodeDisplayColorSetting(mDisplayColorSetting).c_str());
+    mDisplayColorSetting = static_cast<DisplayColorSetting>(atoi(value));
 }
 
 void SurfaceFlinger::startBootAnim() {
@@ -888,6 +905,11 @@ status_t SurfaceFlinger::getDisplayConfigs(const sp<IBinder>& display,
         // All non-virtual displays are currently considered secure.
         info.secure = true;
 
+        if (type == DisplayDevice::DISPLAY_PRIMARY &&
+            mPrimaryDisplayOrientation & DisplayState::eOrientationSwapMask) {
+            std::swap(info.w, info.h);
+        }
+
         configs->push_back(info);
     }
 
@@ -1020,26 +1042,12 @@ ColorMode SurfaceFlinger::getActiveColorMode(const sp<IBinder>& display) {
 }
 
 void SurfaceFlinger::setActiveColorModeInternal(const sp<DisplayDevice>& hw,
-                                                ColorMode mode, Dataspace dataSpace) {
+                                                ColorMode mode, Dataspace dataSpace,
+                                                RenderIntent renderIntent) {
     int32_t type = hw->getDisplayType();
     ColorMode currentMode = hw->getActiveColorMode();
     Dataspace currentDataSpace = hw->getCompositionDataSpace();
     RenderIntent currentRenderIntent = hw->getActiveRenderIntent();
-
-    // Natural Mode means it's color managed and the color must be right,
-    // thus we pick RenderIntent::COLORIMETRIC as render intent.
-    // Native Mode means the display is not color managed, and whichever
-    // render intent is picked doesn't matter, thus return
-    // RenderIntent::COLORIMETRIC as default here.
-    RenderIntent renderIntent = RenderIntent::COLORIMETRIC;
-
-    // In Auto Color Mode, we want to strech to panel color space, right now
-    // only the built-in display supports it.
-    if (mDisplayColorSetting == DisplayColorSetting::ENHANCED &&
-        mBuiltinDisplaySupportsEnhance &&
-        hw->getDisplayType() == DisplayDevice::DISPLAY_PRIMARY) {
-        renderIntent = RenderIntent::ENHANCE;
-    }
 
     if (mode == currentMode && dataSpace == currentDataSpace &&
         renderIntent == currentRenderIntent) {
@@ -1090,7 +1098,8 @@ status_t SurfaceFlinger::setActiveColorMode(const sp<IBinder>& display,
                 ALOGW("Attempt to set active color mode %s %d for virtual display",
                       decodeColorMode(mMode).c_str(), mMode);
             } else {
-                mFlinger.setActiveColorModeInternal(hw, mMode, Dataspace::UNKNOWN);
+                mFlinger.setActiveColorModeInternal(hw, mMode, Dataspace::UNKNOWN,
+                                                    RenderIntent::COLORIMETRIC);
             }
             return true;
         }
@@ -1122,31 +1131,14 @@ status_t SurfaceFlinger::getHdrCapabilities(const sp<IBinder>& display,
         return BAD_VALUE;
     }
 
-    HdrCapabilities capabilities;
-    int status = getBE().mHwc->getHdrCapabilities(
-        displayDevice->getHwcDisplayId(), &capabilities);
-    if (status == NO_ERROR) {
-        if (displayDevice->hasWideColorGamut()) {
-            std::vector<Hdr> types = capabilities.getSupportedHdrTypes();
-            // insert HDR10/HLG as we will force client composition for HDR10/HLG
-            // layers
-            if (!displayDevice->hasHDR10Support()) {
-                types.push_back(Hdr::HDR10);
-            }
-            if (!displayDevice->hasHLGSupport()) {
-                types.push_back(Hdr::HLG);
-            }
-
-            *outCapabilities = HdrCapabilities(types,
-                    capabilities.getDesiredMaxLuminance(),
-                    capabilities.getDesiredMaxAverageLuminance(),
-                    capabilities.getDesiredMinLuminance());
-        } else {
-            *outCapabilities = std::move(capabilities);
-        }
-    } else {
-        return BAD_VALUE;
-    }
+    // At this point the DisplayDeivce should already be set up,
+    // meaning the luminance information is already queried from
+    // hardware composer and stored properly.
+    const HdrCapabilities& capabilities = displayDevice->getHdrCapabilities();
+    *outCapabilities = HdrCapabilities(capabilities.getSupportedHdrTypes(),
+                                       capabilities.getDesiredMaxLuminance(),
+                                       capabilities.getDesiredMaxAverageLuminance(),
+                                       capabilities.getDesiredMinLuminance());
 
     return NO_ERROR;
 }
@@ -1163,9 +1155,11 @@ status_t SurfaceFlinger::enableVSyncInjections(bool enable) {
             ALOGV("VSync Injections enabled");
             if (mVSyncInjector.get() == nullptr) {
                 mVSyncInjector = std::make_unique<InjectVSyncSource>();
-                mInjectorEventThread =
-                        std::make_unique<impl::EventThread>(mVSyncInjector.get(), *this, false,
-                                                            "injEventThread");
+                mInjectorEventThread = std::make_unique<
+                        impl::EventThread>(mVSyncInjector.get(),
+                                           [this]() { resyncWithRateLimit(); },
+                                           impl::EventThread::InterceptVSyncsCallback(),
+                                           "injEventThread");
             }
             mEventQueue->setEventThread(mInjectorEventThread.get());
         } else {
@@ -1489,9 +1483,12 @@ void SurfaceFlinger::onMessageReceived(int32_t what) {
                     (mPreviousPresentFence->getSignalTime() ==
                             Fence::SIGNAL_TIME_PENDING);
             ATRACE_INT("FrameMissed", static_cast<int>(frameMissed));
-            if (mPropagateBackpressure && frameMissed) {
-                signalLayerUpdate();
-                break;
+            if (frameMissed) {
+                mTimeStats.incrementMissedFrames();
+                if (mPropagateBackpressure) {
+                    signalLayerUpdate();
+                    break;
+                }
             }
 
             // Now that we're going to make it to the handleMessageTransaction()
@@ -1793,6 +1790,11 @@ void SurfaceFlinger::postComposition(nsecs_t refreshStartTime)
 
     dumpDrawCycle(false);
 
+    mTimeStats.incrementTotalFrames();
+    if (mHadClientComposition) {
+        mTimeStats.incrementClientCompositionFrames();
+    }
+
     if (getBE().mHwc->isConnected(HWC_DISPLAY_PRIMARY) &&
             hw->getPowerMode() == HWC_POWER_MODE_OFF) {
         return;
@@ -1881,54 +1883,36 @@ void SurfaceFlinger::rebuildLayerStacks() {
     }
 }
 
-mat4 SurfaceFlinger::computeSaturationMatrix() const {
-    if (mGlobalSaturationFactor == 1.0f) {
-        return mat4();
-    }
-
-    // Rec.709 luma coefficients
-    float3 luminance{0.213f, 0.715f, 0.072f};
-    luminance *= 1.0f - mGlobalSaturationFactor;
-    return mat4(
-        vec4{luminance.r + mGlobalSaturationFactor, luminance.r, luminance.r, 0.0f},
-        vec4{luminance.g, luminance.g + mGlobalSaturationFactor, luminance.g, 0.0f},
-        vec4{luminance.b, luminance.b, luminance.b + mGlobalSaturationFactor, 0.0f},
-        vec4{0.0f, 0.0f, 0.0f, 1.0f}
-    );
-}
-
-// Returns a dataspace that fits all visible layers.  The returned dataspace
+// Returns a data space that fits all visible layers.  The returned data space
 // can only be one of
-//
-//  - Dataspace::V0_SRGB
+//  - Dataspace::SRGB (use legacy dataspace and let HWC saturate when colors are enhanced)
 //  - Dataspace::DISPLAY_P3
-//  - Dataspace::V0_SCRGB_LINEAR
-// TODO(b/73825729) Add BT2020 data space.
-ui::Dataspace SurfaceFlinger::getBestDataspace(
-        const sp<const DisplayDevice>& displayDevice) const {
-    Dataspace bestDataspace = Dataspace::V0_SRGB;
+// The returned HDR data space is one of
+//  - Dataspace::UNKNOWN
+//  - Dataspace::BT2020_HLG
+//  - Dataspace::BT2020_PQ
+Dataspace SurfaceFlinger::getBestDataspace(
+    const sp<const DisplayDevice>& displayDevice, Dataspace* outHdrDataSpace) const {
+    Dataspace bestDataSpace = Dataspace::SRGB;
+    *outHdrDataSpace = Dataspace::UNKNOWN;
+
     for (const auto& layer : displayDevice->getVisibleLayersSortedByZ()) {
         switch (layer->getDataSpace()) {
             case Dataspace::V0_SCRGB:
             case Dataspace::V0_SCRGB_LINEAR:
-                // return immediately
-                return Dataspace::V0_SCRGB_LINEAR;
             case Dataspace::DISPLAY_P3:
-                bestDataspace = Dataspace::DISPLAY_P3;
+                bestDataSpace = Dataspace::DISPLAY_P3;
                 break;
-            // Historically, HDR dataspaces are ignored by SurfaceFlinger. But
-            // since SurfaceFlinger simulates HDR support now, it should honor
-            // them unless there is also native support.
             case Dataspace::BT2020_PQ:
             case Dataspace::BT2020_ITU_PQ:
-                if (!displayDevice->hasHDR10Support()) {
-                    return Dataspace::V0_SCRGB_LINEAR;
-                }
+                *outHdrDataSpace = Dataspace::BT2020_PQ;
                 break;
             case Dataspace::BT2020_HLG:
             case Dataspace::BT2020_ITU_HLG:
-                if (!displayDevice->hasHLGSupport()) {
-                    return Dataspace::V0_SCRGB_LINEAR;
+                // When there's mixed PQ content and HLG content, we set the HDR
+                // data space to be BT2020_PQ and convert HLG to PQ.
+                if (*outHdrDataSpace == Dataspace::UNKNOWN) {
+                    *outHdrDataSpace = Dataspace::BT2020_HLG;
                 }
                 break;
             default:
@@ -1936,30 +1920,45 @@ ui::Dataspace SurfaceFlinger::getBestDataspace(
         }
     }
 
-    return bestDataspace;
+    return bestDataSpace;
 }
 
 // Pick the ColorMode / Dataspace for the display device.
-// TODO(b/73825729) Add BT2020 color mode.
 void SurfaceFlinger::pickColorMode(const sp<DisplayDevice>& displayDevice,
-        ColorMode* outMode, Dataspace* outDataSpace) const {
+                                   ColorMode* outMode, Dataspace* outDataSpace,
+                                   RenderIntent* outRenderIntent) const {
     if (mDisplayColorSetting == DisplayColorSetting::UNMANAGED) {
         *outMode = ColorMode::NATIVE;
         *outDataSpace = Dataspace::UNKNOWN;
+        *outRenderIntent = RenderIntent::COLORIMETRIC;
         return;
     }
 
-    switch (getBestDataspace(displayDevice)) {
-        case Dataspace::DISPLAY_P3:
-        case Dataspace::V0_SCRGB_LINEAR:
-            *outMode = ColorMode::DISPLAY_P3;
-            *outDataSpace = Dataspace::DISPLAY_P3;
+    Dataspace hdrDataSpace;
+    Dataspace bestDataSpace = getBestDataspace(displayDevice, &hdrDataSpace);
+
+    // respect hdrDataSpace only when there is modern HDR support
+    const bool isHdr = hdrDataSpace != Dataspace::UNKNOWN &&
+        displayDevice->hasModernHdrSupport(hdrDataSpace);
+    if (isHdr) {
+        bestDataSpace = hdrDataSpace;
+    }
+
+    RenderIntent intent;
+    switch (mDisplayColorSetting) {
+        case DisplayColorSetting::MANAGED:
+        case DisplayColorSetting::UNMANAGED:
+            intent = isHdr ? RenderIntent::TONE_MAP_COLORIMETRIC : RenderIntent::COLORIMETRIC;
             break;
-        default:
-            *outMode = ColorMode::SRGB;
-            *outDataSpace = Dataspace::V0_SRGB;
+        case DisplayColorSetting::ENHANCED:
+            intent = isHdr ? RenderIntent::TONE_MAP_ENHANCE : RenderIntent::ENHANCE;
+            break;
+        default: // vendor display color setting
+            intent = static_cast<RenderIntent>(mDisplayColorSetting);
             break;
     }
+
+    displayDevice->getBestColorMode(bestDataSpace, intent, outDataSpace, outMode, outRenderIntent);
 }
 
 void SurfaceFlinger::setUpHWComposer() {
@@ -1995,15 +1994,12 @@ void SurfaceFlinger::setUpHWComposer() {
         }
     }
 
-    mat4 colorMatrix = mColorMatrix * computeSaturationMatrix() * mDaltonizer();
-    bool isIdentity = (colorMatrix == mat4());
     // build the h/w work list
     if (CC_UNLIKELY(mGeometryInvalid)) {
         mGeometryInvalid = false;
         for (size_t dpy=0 ; dpy<mDisplays.size() ; dpy++) {
-            sp<DisplayDevice> displayDevice(mDisplays[dpy]);
+            sp<const DisplayDevice> displayDevice(mDisplays[dpy]);
             const auto hwcId = displayDevice->getHwcDisplayId();
-            displayDevice->setColorMatrix(!isIdentity);
             if (hwcId >= 0) {
                 const Vector<sp<Layer>>& currentLayers(
                         displayDevice->getVisibleLayersSortedByZ());
@@ -2018,15 +2014,13 @@ void SurfaceFlinger::setUpHWComposer() {
                     }
 
                     layer->setGeometry(displayDevice, i);
-                    if (mDebugDisableHWC || mDebugRegion || (hwcId !=0 && !isIdentity)) {
+                    if (mDebugDisableHWC || mDebugRegion) {
                         layer->forceClientComposition(hwcId);
-                        layer->setColorInversionData(displayDevice);
                     }
                 }
             }
         }
     }
-
 
     // Set the per-frame data
     for (size_t displayId = 0; displayId < mDisplays.size(); ++displayId) {
@@ -2036,9 +2030,9 @@ void SurfaceFlinger::setUpHWComposer() {
         if (hwcId < 0) {
             continue;
         }
-        if (colorMatrix != mPreviousColorMatrix) {
-            displayDevice->setColorTransform(colorMatrix);
-            status_t result = getBE().mHwc->setColorTransform(hwcId, colorMatrix);
+        if (mDrawingState.colorMatrixChanged) {
+            displayDevice->setColorTransform(mDrawingState.colorMatrix);
+            status_t result = getBE().mHwc->setColorTransform(hwcId, mDrawingState.colorMatrix);
             ALOGE_IF(result != NO_ERROR, "Failed to set color transform on "
                     "display %zd: %d", displayId, result);
         }
@@ -2066,12 +2060,13 @@ void SurfaceFlinger::setUpHWComposer() {
         if (hasWideColorDisplay) {
             ColorMode colorMode;
             Dataspace dataSpace;
-            pickColorMode(displayDevice, &colorMode, &dataSpace);
-            setActiveColorModeInternal(displayDevice, colorMode, dataSpace);
+            RenderIntent renderIntent;
+            pickColorMode(displayDevice, &colorMode, &dataSpace, &renderIntent);
+            setActiveColorModeInternal(displayDevice, colorMode, dataSpace, renderIntent);
         }
     }
 
-    mPreviousColorMatrix = colorMatrix;
+    mDrawingState.colorMatrixChanged = false;
 
     dumpDrawCycle(true);
 
@@ -2280,6 +2275,8 @@ sp<DisplayDevice> SurfaceFlinger::setupNewDisplayDeviceInternal(
         const wp<IBinder>& display, int hwcId, const DisplayDeviceState& state,
         const sp<DisplaySurface>& dispSurface, const sp<IGraphicBufferProducer>& producer) {
     bool hasWideColorGamut = false;
+    std::unordered_map<ColorMode, std::vector<RenderIntent>> hwcColorModes;
+
     if (hasWideColorDisplay) {
         std::vector<ColorMode> modes = getHwComposer().getColorModes(hwcId);
         for (ColorMode colorMode : modes) {
@@ -2289,21 +2286,13 @@ sp<DisplayDevice> SurfaceFlinger::setupNewDisplayDeviceInternal(
                 case ColorMode::DCI_P3:
                     hasWideColorGamut = true;
                     break;
-                // TODO(lpy) Handle BT2020, BT2100_PQ and BT2100_HLG properly.
                 default:
                     break;
             }
 
             std::vector<RenderIntent> renderIntents = getHwComposer().getRenderIntents(hwcId,
                                                                                        colorMode);
-            if (state.type == DisplayDevice::DISPLAY_PRIMARY) {
-                for (auto intent : renderIntents) {
-                    if (intent == RenderIntent::ENHANCE) {
-                        mBuiltinDisplaySupportsEnhance = true;
-                        break;
-                    }
-                }
-            }
+            hwcColorModes.emplace(colorMode, renderIntents);
         }
     }
 
@@ -2343,7 +2332,7 @@ sp<DisplayDevice> SurfaceFlinger::setupNewDisplayDeviceInternal(
                               dispSurface, std::move(renderSurface), displayWidth, displayHeight,
                               hasWideColorGamut, hdrCapabilities,
                               getHwComposer().getSupportedPerFrameMetadata(hwcId),
-                              initialPowerMode);
+                              hwcColorModes, initialPowerMode);
 
     if (maxFrameBufferAcquiredBuffers >= 3) {
         nativeWindowSurface->preallocateBuffers();
@@ -2353,9 +2342,13 @@ sp<DisplayDevice> SurfaceFlinger::setupNewDisplayDeviceInternal(
     Dataspace defaultDataSpace = Dataspace::UNKNOWN;
     if (hasWideColorGamut) {
         defaultColorMode = ColorMode::SRGB;
-        defaultDataSpace = Dataspace::V0_SRGB;
+        defaultDataSpace = Dataspace::SRGB;
     }
-    setActiveColorModeInternal(hw, defaultColorMode, defaultDataSpace);
+    setActiveColorModeInternal(hw, defaultColorMode, defaultDataSpace,
+                               RenderIntent::COLORIMETRIC);
+    if (state.type < DisplayDevice::DISPLAY_VIRTUAL) {
+        hw->setActiveConfig(getHwComposer().getActiveConfigIndex(state.type));
+    }
     hw->setLayerStack(state.layerStack);
     hw->setProjection(state.orientation, state.viewport, state.frame);
     hw->setDisplayName(state.displayName);
@@ -2685,6 +2678,9 @@ void SurfaceFlinger::commitTransaction()
     mAnimCompositionPending = mAnimTransactionPending;
 
     mDrawingState = mCurrentState;
+    // clear the "changed" flags in current state
+    mCurrentState.colorMatrixChanged = false;
+
     mDrawingState.traverseInZOrder([](Layer* layer) {
         layer->commitChildList();
     });
@@ -2947,19 +2943,11 @@ bool SurfaceFlinger::doComposeSurfaces(const sp<const DisplayDevice>& displayDev
     const DisplayRenderArea renderArea(displayDevice);
     const auto hwcId = displayDevice->getHwcDisplayId();
     const bool hasClientComposition = getBE().mHwc->hasClientComposition(hwcId);
-    const bool hasDeviceComposition = getBE().mHwc->hasDeviceComposition(hwcId);
-    const bool skipClientColorTransform = (getBE().mHwc->hasCapability(
-        HWC2::Capability::SkipClientColorTransform) && (hwcId == 0));
     ATRACE_INT("hasClientComposition", hasClientComposition);
 
-    mat4 oldColorMatrix;
-    mat4 legacySrgbSaturationMatrix = mLegacySrgbSaturationMatrix;
-    const bool applyColorMatrix = !hasDeviceComposition && !skipClientColorTransform;
-    if (applyColorMatrix) {
-        mat4 colorMatrix = mColorMatrix * computeSaturationMatrix() * mDaltonizer();
-        oldColorMatrix = getRenderEngine().setupColorTransform(colorMatrix);
-        legacySrgbSaturationMatrix = colorMatrix * legacySrgbSaturationMatrix;
-    }
+    bool applyColorMatrix = false;
+    bool needsLegacyColorMatrix = false;
+    bool legacyColorMatrixApplied = false;
 
     if (hasClientComposition) {
         ALOGV("hasClientComposition");
@@ -2969,6 +2957,22 @@ bool SurfaceFlinger::doComposeSurfaces(const sp<const DisplayDevice>& displayDev
             outputDataspace = displayDevice->getCompositionDataSpace();
         }
         getBE().mRenderEngine->setOutputDataSpace(outputDataspace);
+        getBE().mRenderEngine->setDisplayMaxLuminance(
+                displayDevice->getHdrCapabilities().getDesiredMaxLuminance());
+
+        const bool hasDeviceComposition = getBE().mHwc->hasDeviceComposition(hwcId);
+        const bool skipClientColorTransform = getBE().mHwc->hasCapability(
+            HWC2::Capability::SkipClientColorTransform);
+
+        applyColorMatrix = !hasDeviceComposition && !skipClientColorTransform;
+        if (applyColorMatrix) {
+            getRenderEngine().setupColorTransform(mDrawingState.colorMatrix);
+        }
+
+        needsLegacyColorMatrix =
+            (displayDevice->getActiveRenderIntent() >= RenderIntent::ENHANCE &&
+             outputDataspace != Dataspace::UNKNOWN &&
+             outputDataspace != Dataspace::SRGB);
 
         if (!displayDevice->makeCurrent()) {
             ALOGW("DisplayDevice::makeCurrent failed. Aborting surface composition for display %s",
@@ -3031,73 +3035,58 @@ bool SurfaceFlinger::doComposeSurfaces(const sp<const DisplayDevice>& displayDev
 
     ALOGV("Rendering client layers");
     const Transform& displayTransform = displayDevice->getTransform();
-    if (hwcId >= 0) {
-        // we're using h/w composer
-        bool firstLayer = true;
-        for (auto& layer : displayDevice->getVisibleLayersSortedByZ()) {
-            const Region clip(bounds.intersect(
-                    displayTransform.transform(layer->visibleRegion)));
-            ALOGV("Layer: %s", layer->getName().string());
-            ALOGV("  Composition type: %s",
-                    to_string(layer->getCompositionType(hwcId)).c_str());
-            if (!clip.isEmpty()) {
-                switch (layer->getCompositionType(hwcId)) {
-                    case HWC2::Composition::Cursor:
-                    case HWC2::Composition::Device:
-                    case HWC2::Composition::Sideband:
-                    case HWC2::Composition::SolidColor: {
-                        const Layer::State& state(layer->getDrawingState());
-                        if (layer->getClearClientTarget(hwcId) && !firstLayer &&
-                                layer->isOpaque(state) && (layer->getAlpha() == 1.0f)
-                                && hasClientComposition) {
-                            // never clear the very first layer since we're
-                            // guaranteed the FB is already cleared
-                            layer->clearWithOpenGL(renderArea);
-                        }
-                        break;
+    bool firstLayer = true;
+    for (auto& layer : displayDevice->getVisibleLayersSortedByZ()) {
+        const Region clip(bounds.intersect(
+                displayTransform.transform(layer->visibleRegion)));
+        ALOGV("Layer: %s", layer->getName().string());
+        ALOGV("  Composition type: %s",
+                to_string(layer->getCompositionType(hwcId)).c_str());
+        if (!clip.isEmpty()) {
+            switch (layer->getCompositionType(hwcId)) {
+                case HWC2::Composition::Cursor:
+                case HWC2::Composition::Device:
+                case HWC2::Composition::Sideband:
+                case HWC2::Composition::SolidColor: {
+                    const Layer::State& state(layer->getDrawingState());
+                    if (layer->getClearClientTarget(hwcId) && !firstLayer &&
+                            layer->isOpaque(state) && (layer->getAlpha() == 1.0f)
+                            && hasClientComposition) {
+                        // never clear the very first layer since we're
+                        // guaranteed the FB is already cleared
+                        layer->clearWithOpenGL(renderArea);
                     }
-                    case HWC2::Composition::Client: {
-                        // Only apply saturation matrix layer that is legacy SRGB dataspace
-                        // when auto color mode is on.
-                        bool restore = false;
-                        mat4 savedMatrix;
-                        if (mDisplayColorSetting == DisplayColorSetting::ENHANCED &&
-                            layer->isLegacySrgbDataSpace()) {
-                            savedMatrix =
-                                getRenderEngine().setupColorTransform(legacySrgbSaturationMatrix);
-                            restore = true;
-                        }
-                        layer->draw(renderArea, clip);
-                        if (restore) {
-                            getRenderEngine().setupColorTransform(savedMatrix);
-                        }
-                        break;
-                    }
-                    default:
-                        break;
+                    break;
                 }
-            } else {
-                ALOGV("  Skipping for empty clip");
+                case HWC2::Composition::Client: {
+                    // switch color matrices lazily
+                    if (layer->isLegacyDataSpace() && needsLegacyColorMatrix) {
+                        if (!legacyColorMatrixApplied) {
+                            getRenderEngine().setSaturationMatrix(mLegacySrgbSaturationMatrix);
+                            legacyColorMatrixApplied = true;
+                        }
+                    } else if (legacyColorMatrixApplied) {
+                        getRenderEngine().setSaturationMatrix(mat4());
+                        legacyColorMatrixApplied = false;
+                    }
+
+                    layer->draw(renderArea, clip);
+                    break;
+                }
+                default:
+                    break;
             }
-            firstLayer = false;
+        } else {
+            ALOGV("  Skipping for empty clip");
         }
-    } else {
-        // we're not using h/w composer
-        for (auto& layer : displayDevice->getVisibleLayersSortedByZ()) {
-            if(DisplayUtils::getInstance()->skipColorLayer(layer->getTypeId())) {
-                // Skipping color layer for WFD direct streaming case
-                continue;
-            }
-            const Region clip(bounds.intersect(
-                    displayTransform.transform(layer->visibleRegion)));
-            if (!clip.isEmpty()) {
-                layer->draw(renderArea, clip);
-            }
-        }
+        firstLayer = false;
     }
 
     if (applyColorMatrix) {
-        getRenderEngine().setupColorTransform(oldColorMatrix);
+        getRenderEngine().setupColorTransform(mat4());
+    }
+    if (needsLegacyColorMatrix && legacyColorMatrixApplied) {
+        getRenderEngine().setSaturationMatrix(mat4());
     }
 
     // disable scissor at the end of the frame
@@ -3135,12 +3124,14 @@ status_t SurfaceFlinger::addClientLayer(const sp<Client>& client,
             parent->addChild(lbc);
         }
 
-        mGraphicBufferProducerList.insert(IInterface::asBinder(gbc).get());
-        // TODO (b/74616334): Change this back to a fatal assert once the leak is fixed
-        ALOGE_IF(mGraphicBufferProducerList.size() > mMaxGraphicBufferProducerListSize,
-                 "Suspected IGBP leak: %zu IGBPs (%zu max), %zu Layers",
-                 mGraphicBufferProducerList.size(), mMaxGraphicBufferProducerListSize,
-                 mNumLayers);
+        if (gbc != nullptr) {
+            mGraphicBufferProducerList.insert(IInterface::asBinder(gbc).get());
+            LOG_ALWAYS_FATAL_IF(mGraphicBufferProducerList.size() >
+                                        mMaxGraphicBufferProducerListSize,
+                                "Suspected IGBP leak: %zu IGBPs (%zu max), %zu Layers",
+                                mGraphicBufferProducerList.size(),
+                                mMaxGraphicBufferProducerListSize, mNumLayers);
+        }
         mLayersAdded = true;
         mNumLayers++;
     }
@@ -3897,12 +3888,6 @@ status_t SurfaceFlinger::doDump(int fd, const Vector<String16>& args, bool asPro
         size_t index = 0;
         size_t numArgs = args.size();
 
-        if (asProto) {
-            LayersProto layersProto = dumpProtoInfo(LayerVector::StateSet::Current);
-            result.append(layersProto.SerializeAsString().c_str(), layersProto.ByteSize());
-            dumpAll = false;
-        }
-
         if (numArgs) {
             if ((index < numArgs) &&
                     (args[index] == String16("--list"))) {
@@ -3985,10 +3970,22 @@ status_t SurfaceFlinger::doDump(int fd, const Vector<String16>& args, bool asPro
                 index++;
                 enableRegionDump = true;
             }
+
+            if ((index < numArgs) && (args[index] == String16("--timestats"))) {
+                index++;
+                mTimeStats.parseArgs(asProto, args, index, result);
+                dumpAll = false;
+            }
         }
 
         if (dumpAll) {
-            dumpAllLocked(args, index, result, enableRegionDump);
+            if (asProto) {
+                LayersProto layersProto = dumpProtoInfo(LayerVector::StateSet::Current,
+                        enableRegionDump);
+                result.append(layersProto.SerializeAsString().c_str(), layersProto.ByteSize());
+            } else {
+                dumpAllLocked(args, index, result, enableRegionDump);
+            }
         }
 
         if (locked) {
@@ -4156,7 +4153,8 @@ void SurfaceFlinger::dumpBufferingStats(String8& result) const {
 
 void SurfaceFlinger::dumpWideColorInfo(String8& result) const {
     result.appendFormat("hasWideColorDisplay: %d\n", hasWideColorDisplay);
-    result.appendFormat("DisplayColorSetting: %d\n", mDisplayColorSetting);
+    result.appendFormat("DisplayColorSetting: %s\n",
+            decodeDisplayColorSetting(mDisplayColorSetting).c_str());
 
     // TODO: print out if wide-color mode is active or not
 
@@ -4429,6 +4427,30 @@ bool SurfaceFlinger::startDdmConnection()
     return true;
 }
 
+void SurfaceFlinger::updateColorMatrixLocked() {
+    mat4 colorMatrix;
+    if (mGlobalSaturationFactor != 1.0f) {
+        // Rec.709 luma coefficients
+        float3 luminance{0.213f, 0.715f, 0.072f};
+        luminance *= 1.0f - mGlobalSaturationFactor;
+        mat4 saturationMatrix = mat4(
+            vec4{luminance.r + mGlobalSaturationFactor, luminance.r, luminance.r, 0.0f},
+            vec4{luminance.g, luminance.g + mGlobalSaturationFactor, luminance.g, 0.0f},
+            vec4{luminance.b, luminance.b, luminance.b + mGlobalSaturationFactor, 0.0f},
+            vec4{0.0f, 0.0f, 0.0f, 1.0f}
+        );
+        colorMatrix = mClientColorMatrix * saturationMatrix * mDaltonizer();
+    } else {
+        colorMatrix = mClientColorMatrix * mDaltonizer();
+    }
+
+    if (mCurrentState.colorMatrix != colorMatrix) {
+        mCurrentState.colorMatrix = colorMatrix;
+        mCurrentState.colorMatrixChanged = true;
+        setTransactionFlags(eTransactionNeeded);
+    }
+}
+
 status_t SurfaceFlinger::CheckTransactCodeCredentials(uint32_t code) {
     switch (code) {
         case CREATE_CONNECTION:
@@ -4563,6 +4585,7 @@ status_t SurfaceFlinger::onTransact(
                 return NO_ERROR;
             }
             case 1014: {
+                Mutex::Autolock _l(mStateLock);
                 // daltonize
                 n = data.readInt32();
                 switch (n % 10) {
@@ -4584,33 +4607,33 @@ status_t SurfaceFlinger::onTransact(
                 } else {
                     mDaltonizer.setMode(ColorBlindnessMode::Simulation);
                 }
-                invalidateHwcGeometry();
-                repaintEverything();
+
+                updateColorMatrixLocked();
                 return NO_ERROR;
             }
             case 1015: {
+                Mutex::Autolock _l(mStateLock);
                 // apply a color matrix
                 n = data.readInt32();
                 if (n) {
                     // color matrix is sent as a column-major mat4 matrix
                     for (size_t i = 0 ; i < 4; i++) {
                         for (size_t j = 0; j < 4; j++) {
-                            mColorMatrix[i][j] = data.readFloat();
+                            mClientColorMatrix[i][j] = data.readFloat();
                         }
                     }
                 } else {
-                    mColorMatrix = mat4();
+                    mClientColorMatrix = mat4();
                 }
 
                 // Check that supplied matrix's last row is {0,0,0,1} so we can avoid
                 // the division by w in the fragment shader
-                float4 lastRow(transpose(mColorMatrix)[3]);
+                float4 lastRow(transpose(mClientColorMatrix)[3]);
                 if (any(greaterThan(abs(lastRow - float4{0, 0, 0, 1}), float4{1e-4f}))) {
                     ALOGE("The color transform's last row must be (0, 0, 0, 1)");
                 }
 
-                invalidateHwcGeometry();
-                repaintEverything();
+                updateColorMatrixLocked();
                 return NO_ERROR;
             }
             // This is an experimental interface
@@ -4653,22 +4676,14 @@ status_t SurfaceFlinger::onTransact(
                 return NO_ERROR;
             }
             case 1022: { // Set saturation boost
+                Mutex::Autolock _l(mStateLock);
                 mGlobalSaturationFactor = std::max(0.0f, std::min(data.readFloat(), 2.0f));
 
-                invalidateHwcGeometry();
-                repaintEverything();
+                updateColorMatrixLocked();
                 return NO_ERROR;
             }
             case 1023: { // Set native mode
-                int32_t value = data.readInt32();
-                if (value > 2) {
-                    return BAD_VALUE;
-                }
-                if (value == 2 && !mBuiltinDisplaySupportsEnhance) {
-                    return BAD_VALUE;
-                }
-
-                mDisplayColorSetting = toDisplayColorSetting(value);
+                mDisplayColorSetting = static_cast<DisplayColorSetting>(data.readInt32());
                 invalidateHwcGeometry();
                 repaintEverything();
                 return NO_ERROR;
@@ -4697,20 +4712,27 @@ status_t SurfaceFlinger::onTransact(
             }
             // Is a DisplayColorSetting supported?
             case 1027: {
-                int32_t value = data.readInt32();
-                switch (value) {
-                    case 0:
-                        reply->writeBool(hasWideColorDisplay);
-                        return NO_ERROR;
-                    case 1:
-                        reply->writeBool(true);
-                        return NO_ERROR;
-                    case 2:
-                        reply->writeBool(mBuiltinDisplaySupportsEnhance);
-                        return NO_ERROR;
-                    default:
-                        return BAD_VALUE;
+                sp<const DisplayDevice> hw(getDefaultDisplayDevice());
+                if (!hw) {
+                    return NAME_NOT_FOUND;
                 }
+
+                DisplayColorSetting setting = static_cast<DisplayColorSetting>(data.readInt32());
+                switch (setting) {
+                    case DisplayColorSetting::MANAGED:
+                        reply->writeBool(hasWideColorDisplay);
+                        break;
+                    case DisplayColorSetting::UNMANAGED:
+                        reply->writeBool(true);
+                        break;
+                    case DisplayColorSetting::ENHANCED:
+                        reply->writeBool(hw->hasRenderIntent(RenderIntent::ENHANCE));
+                        break;
+                    default: // vendor display color setting
+                        reply->writeBool(hw->hasRenderIntent(static_cast<RenderIntent>(setting)));
+                        break;
+                }
+                return NO_ERROR;
             }
             case 10000: { // Get frame stats of specific layer
                 Layer* rightLayer = nullptr;
@@ -4810,9 +4832,6 @@ status_t SurfaceFlinger::captureLayers(const sp<IBinder>& layerHandleBinder,
                 return mCrop;
             }
         }
-        bool getWideColorSupport() const override { return false; }
-        Dataspace getDataSpace() const override { return Dataspace::UNKNOWN; }
-
         class ReparentForDrawing {
         public:
             const sp<Layer>& oldParent;
@@ -4905,7 +4924,7 @@ status_t SurfaceFlinger::captureScreenCommon(RenderArea& renderArea,
                                              bool useIdentityTransform) {
     ATRACE_CALL();
 
-    renderArea.updateDimensions();
+    renderArea.updateDimensions(mPrimaryDisplayOrientation);
 
     const uint32_t usage = GRALLOC_USAGE_SW_READ_OFTEN | GRALLOC_USAGE_SW_WRITE_OFTEN |
             GRALLOC_USAGE_HW_RENDER | GRALLOC_USAGE_HW_TEXTURE;
@@ -4989,13 +5008,35 @@ void SurfaceFlinger::renderScreenImplLocked(const RenderArea& renderArea,
     const auto reqHeight = renderArea.getReqHeight();
     Rect sourceCrop = renderArea.getSourceCrop();
 
-    const bool filtering = static_cast<int32_t>(reqWidth) != raWidth ||
-            static_cast<int32_t>(reqHeight) != raHeight;
+    bool filtering = false;
+    if (mPrimaryDisplayOrientation & DisplayState::eOrientationSwapMask) {
+        filtering = static_cast<int32_t>(reqWidth) != raHeight ||
+                static_cast<int32_t>(reqHeight) != raWidth;
+    } else {
+        filtering = static_cast<int32_t>(reqWidth) != raWidth ||
+                static_cast<int32_t>(reqHeight) != raHeight;
+    }
 
     // if a default or invalid sourceCrop is passed in, set reasonable values
     if (sourceCrop.width() == 0 || sourceCrop.height() == 0 || !sourceCrop.isValid()) {
         sourceCrop.setLeftTop(Point(0, 0));
         sourceCrop.setRightBottom(Point(raWidth, raHeight));
+    } else if (mPrimaryDisplayOrientation != DisplayState::eOrientationDefault) {
+        Transform tr;
+        uint32_t flags = 0x00;
+        switch (mPrimaryDisplayOrientation) {
+            case DisplayState::eOrientation90:
+                flags = Transform::ROT_90;
+                break;
+            case DisplayState::eOrientation180:
+                flags = Transform::ROT_180;
+                break;
+            case DisplayState::eOrientation270:
+                flags = Transform::ROT_270;
+                break;
+        }
+        tr.set(flags, raWidth, raHeight);
+        sourceCrop = tr.transform(sourceCrop);
     }
 
     // ensure that sourceCrop is inside screen
@@ -5012,37 +5053,46 @@ void SurfaceFlinger::renderScreenImplLocked(const RenderArea& renderArea,
         ALOGE("Invalid crop rect: b = %d (> %d)", sourceCrop.bottom, raHeight);
     }
 
-    Dataspace outputDataspace = Dataspace::UNKNOWN;
-    if (renderArea.getWideColorSupport()) {
-        outputDataspace = renderArea.getDataSpace();
-    }
-    getBE().mRenderEngine->setOutputDataSpace(outputDataspace);
+    // assume ColorMode::SRGB / RenderIntent::COLORIMETRIC
+    engine.setOutputDataSpace(Dataspace::SRGB);
+    engine.setDisplayMaxLuminance(DisplayDevice::sDefaultMaxLumiance);
 
     // make sure to clear all GL error flags
     engine.checkErrors();
 
-    uint32_t rotation = renderArea.getRotationFlags();
-    DisplayRenderArea* displayRenderArea = NULL;
-
-    if(renderArea.getType() == "DisplayRenderArea")
-    displayRenderArea = static_cast<DisplayRenderArea*> (const_cast<RenderArea *> (&renderArea));
-
-    if (displayRenderArea) {
-        int32_t hw_h = displayRenderArea->getHeight();
-        if (DisplayDevice::DISPLAY_PRIMARY == displayRenderArea->getDisplayType()) {
-            rotation = (Transform::orientation_flags)
-                       (rotation ^ displayRenderArea->getPanelMountFlip());
-            if (displayRenderArea->getPanelMountFlip() == Transform::orientation_flags::ROT_180) {
-                sourceCrop.top = hw_h - sourceCrop.top;
-                sourceCrop.bottom = hw_h - sourceCrop.bottom;
-                yswap = false;
-            }
+    Transform::orientation_flags rotation = renderArea.getRotationFlags();
+    if (mPrimaryDisplayOrientation != DisplayState::eOrientationDefault) {
+        // convert hw orientation into flag presentation
+        // here inverse transform needed
+        uint8_t hw_rot_90  = 0x00;
+        uint8_t hw_flip_hv = 0x00;
+        switch (mPrimaryDisplayOrientation) {
+            case DisplayState::eOrientation90:
+                hw_rot_90 = Transform::ROT_90;
+                hw_flip_hv = Transform::ROT_180;
+                break;
+            case DisplayState::eOrientation180:
+                hw_flip_hv = Transform::ROT_180;
+                break;
+            case DisplayState::eOrientation270:
+                hw_rot_90  = Transform::ROT_90;
+                break;
         }
-    }
 
+        // transform flags operation
+        // 1) flip H V if both have ROT_90 flag
+        // 2) XOR these flags
+        uint8_t rotation_rot_90  = rotation & Transform::ROT_90;
+        uint8_t rotation_flip_hv = rotation & Transform::ROT_180;
+        if (rotation_rot_90 & hw_rot_90) {
+            rotation_flip_hv = (~rotation_flip_hv) & Transform::ROT_180;
+        }
+        rotation = static_cast<Transform::orientation_flags>
+                   ((rotation_rot_90 ^ hw_rot_90) | (rotation_flip_hv ^ hw_flip_hv));
+    }
     // set-up our viewport
     engine.setViewportAndProjection(reqWidth, reqHeight, sourceCrop, raHeight, yswap,
-                                    (Transform::orientation_flags)rotation);
+                                    rotation);
     engine.disableTexturing();
 
     const float alpha = RenderArea::getCaptureFillValue(renderArea.getCaptureFill());

@@ -112,15 +112,17 @@ public:
     virtual void setupLayerBlackedOut() = 0;
     virtual void setupFillWithColor(float r, float g, float b, float a) = 0;
 
-    virtual mat4 setupColorTransform(const mat4& /* colorTransform */) = 0;
+    virtual void setupColorTransform(const mat4& /* colorTransform */) = 0;
+    virtual void setSaturationMatrix(const mat4& /* saturationMatrix */) = 0;
 
     virtual void disableTexturing() = 0;
     virtual void disableBlending() = 0;
 
-    // wide color support
+    // HDR and wide color gamut support
     virtual void setSourceY410BT2020(bool enable) = 0;
     virtual void setSourceDataSpace(ui::Dataspace source) = 0;
     virtual void setOutputDataSpace(ui::Dataspace dataspace) = 0;
+    virtual void setDisplayMaxLuminance(const float maxLuminance) = 0;
 
     // drawing
     virtual void drawMesh(const Mesh& mesh) = 0;
@@ -223,7 +225,8 @@ public:
 
     void checkErrors() const override;
 
-    mat4 setupColorTransform(const mat4& /* colorTransform */) override { return mat4(); }
+    void setupColorTransform(const mat4& /* colorTransform */) override {}
+    void setSaturationMatrix(const mat4& /* saturationMatrix */) override {}
 
     // internal to RenderEngine
     EGLDisplay getEGLDisplay() const;

@@ -85,6 +85,25 @@ public:
         return mFlinger->onHotplugReceived(sequenceId, display, connection);
     }
 
+    auto setDisplayStateLocked(const DisplayState& s) { return mFlinger->setDisplayStateLocked(s); }
+
+    auto onInitializeDisplays() { return mFlinger->onInitializeDisplays(); }
+
+    auto setPowerModeInternal(const sp<DisplayDevice>& hw, int mode, bool stateLockHeld = false) {
+        return mFlinger->setPowerModeInternal(hw, mode, stateLockHeld);
+    }
+
+    /* ------------------------------------------------------------------------
+     * Read-only access to private data to assert post-conditions.
+     */
+
+    const auto& getAnimFrameTracker() const { return mFlinger->mAnimFrameTracker; }
+    const auto& getHasPoweredOff() const { return mFlinger->mHasPoweredOff; }
+    const auto& getHWVsyncAvailable() const { return mFlinger->mHWVsyncAvailable; }
+    const auto& getVisibleRegionsDirty() const { return mFlinger->mVisibleRegionsDirty; }
+
+    const auto& getCompositorTiming() const { return mFlinger->getBE().mCompositorTiming; }
+
     /* ------------------------------------------------------------------------
      * Read-write access to private data to set up preconditions and assert
      * post-conditions.
@@ -247,6 +266,16 @@ public:
             return mFlinger.mutableCurrentState().displays.editValueFor(mDisplayToken);
         }
 
+        const auto& getDrawingDisplayState() {
+            return mFlinger.mutableDrawingState().displays.valueFor(mDisplayToken);
+        }
+
+        const auto& getCurrentDisplayState() {
+            return mFlinger.mutableCurrentState().displays.valueFor(mDisplayToken);
+        }
+
+        auto& mutableDisplayDevice() { return mFlinger.mutableDisplays().valueFor(mDisplayToken); }
+
         auto& setNativeWindow(const sp<ANativeWindow>& nativeWindow) {
             mNativeWindow = nativeWindow;
             return *this;
@@ -268,17 +297,19 @@ public:
         }
 
         sp<DisplayDevice> inject() {
+            std::unordered_map<ui::ColorMode, std::vector<ui::RenderIntent>> hdrAndRenderIntents;
             sp<DisplayDevice> device =
                     new DisplayDevice(mFlinger.mFlinger.get(), mType, mHwcId, mSecure, mDisplayToken,
                                       mNativeWindow, mDisplaySurface, std::move(mRenderSurface), 0,
-                                      0, false, HdrCapabilities(), 0, HWC_POWER_MODE_NORMAL);
+                                      0, false, HdrCapabilities(), 0, hdrAndRenderIntents,
+                                      HWC_POWER_MODE_NORMAL);
             mFlinger.mutableDisplays().add(mDisplayToken, device);
 
             DisplayDeviceState state(mType, mSecure);
             mFlinger.mutableCurrentState().displays.add(mDisplayToken, state);
             mFlinger.mutableDrawingState().displays.add(mDisplayToken, state);
 
-            if (mType < DisplayDevice::DISPLAY_VIRTUAL) {
+            if (mType >= DisplayDevice::DISPLAY_PRIMARY && mType < DisplayDevice::DISPLAY_VIRTUAL) {
                 mFlinger.mutableBuiltinDisplays()[mType] = mDisplayToken;
             }
 

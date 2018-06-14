@@ -30,8 +30,6 @@ public:
     virtual bool isSecure() const = 0;
     virtual bool needsFiltering() const = 0;
     virtual Rect getSourceCrop() const = 0;
-    virtual bool getWideColorSupport() const = 0;
-    virtual ui::Dataspace getDataSpace() const = 0;
     virtual std::string getType() const = 0;
 
     virtual void render(std::function<void()> drawLayers) { drawLayers(); }
@@ -39,7 +37,7 @@ public:
     int getReqHeight() const { return mReqHeight; };
     int getReqWidth() const { return mReqWidth; };
     Transform::orientation_flags getRotationFlags() const { return mRotationFlags; };
-    status_t updateDimensions();
+    status_t updateDimensions(int displayRotation);
 
     CaptureFill getCaptureFill() const { return mCaptureFill; };
 

@@ -20,6 +20,7 @@
 #include "Transform.h"
 
 #include <stdlib.h>
+#include <unordered_map>
 
 #include <math/mat4.h>
 
@@ -27,6 +28,7 @@
 #include <gui/ISurfaceComposer.h>
 #include <hardware/hwcomposer_defs.h>
 #include <ui/GraphicTypes.h>
+#include <ui/HdrCapabilities.h>
 #include <ui/Region.h>
 #include <utils/RefBase.h>
 #include <utils/Mutex.h>
@@ -53,6 +55,9 @@ class HWComposer;
 class DisplayDevice : public LightRefBase<DisplayDevice>
 {
 public:
+    constexpr static float sDefaultMinLumiance = 0.0;
+    constexpr static float sDefaultMaxLumiance = 500.0;
+
     // region in layer-stack space
     mutable Region dirtyRegion;
     // region in screen space
@@ -86,6 +91,7 @@ public:
             bool hasWideColorGamut,
             const HdrCapabilities& hdrCapabilities,
             const int32_t supportedPerFrameMetadata,
+            const std::unordered_map<ui::ColorMode, std::vector<ui::RenderIntent>>& hwcColorModes,
             int initialPowerMode);
     // clang-format on
 
@@ -138,10 +144,31 @@ public:
     // machine happy without actually queueing a buffer if nothing has changed
     status_t beginFrame(bool mustRecompose) const;
     status_t prepareFrame(HWComposer& hwc);
+
     bool hasWideColorGamut() const { return mHasWideColorGamut; }
+    // Whether h/w composer has native support for specific HDR type.
     bool hasHDR10Support() const { return mHasHdr10; }
     bool hasHLGSupport() const { return mHasHLG; }
     bool hasDolbyVisionSupport() const { return mHasDolbyVision; }
+
+    // Return true if the corresponding color mode for the HDR dataspace is
+    // supported.
+    bool hasModernHdrSupport(ui::Dataspace dataspace) const;
+
+    // The returned HdrCapabilities is the combination of HDR capabilities from
+    // hardware composer and RenderEngine. When the DisplayDevice supports wide
+    // color gamut, RenderEngine is able to simulate HDR support in Display P3
+    // color space for both PQ and HLG HDR contents. The minimum and maximum
+    // luminance will be set to sDefaultMinLumiance and sDefaultMaxLumiance
+    // respectively if hardware composer doesn't return meaningful values.
+    const HdrCapabilities& getHdrCapabilities() const { return mHdrCapabilities; }
+
+    // Return true if intent is supported by the display.
+    bool hasRenderIntent(ui::RenderIntent intent) const;
+
+    void getBestColorMode(ui::Dataspace dataspace, ui::RenderIntent intent,
+                          ui::Dataspace* outDataspace, ui::ColorMode* outMode,
+                          ui::RenderIntent* outIntent) const;
 
     void swapBuffers(HWComposer& hwc) const;
 
@@ -191,8 +218,6 @@ public:
      */
     uint32_t getPageFlipCount() const;
     void dump(String8& result) const;
-    void setColorMatrix(const bool colorMatrix) {mDisplayHasColorMatrix = colorMatrix;}
-    bool hasColorMatrix() const {return mDisplayHasColorMatrix;}
 
 private:
     /*
@@ -252,10 +277,10 @@ private:
     // Panel's mount flip, H, V or 180 (HV)
     uint32_t mPanelMountFlip;
     // current active color mode
-    ui::ColorMode mActiveColorMode;
+    ui::ColorMode mActiveColorMode = ui::ColorMode::NATIVE;
     // Current active render intent.
-    ui::RenderIntent mActiveRenderIntent;
-    ui::Dataspace mCompositionDataSpace;
+    ui::RenderIntent mActiveRenderIntent = ui::RenderIntent::COLORIMETRIC;
+    ui::Dataspace mCompositionDataSpace = ui::Dataspace::UNKNOWN;
     // Current color transform
     android_color_transform_t mColorTransform;
 
@@ -266,8 +291,28 @@ private:
     bool mHasHdr10;
     bool mHasHLG;
     bool mHasDolbyVision;
+    HdrCapabilities mHdrCapabilities;
     const int32_t mSupportedPerFrameMetadata;
-    bool mDisplayHasColorMatrix;
+
+    // Mappings from desired Dataspace/RenderIntent to the supported
+    // Dataspace/ColorMode/RenderIntent.
+    using ColorModeKey = uint64_t;
+    struct ColorModeValue {
+        ui::Dataspace dataspace;
+        ui::ColorMode colorMode;
+        ui::RenderIntent renderIntent;
+    };
+
+    static ColorModeKey getColorModeKey(ui::Dataspace dataspace, ui::RenderIntent intent) {
+        return (static_cast<uint64_t>(dataspace) << 32) | static_cast<uint32_t>(intent);
+    }
+    void populateColorModes(
+            const std::unordered_map<ui::ColorMode, std::vector<ui::RenderIntent>>& hwcColorModes);
+    void addColorMode(
+            const std::unordered_map<ui::ColorMode, std::vector<ui::RenderIntent>>& hwcColorModes,
+            const ui::ColorMode mode, const ui::RenderIntent intent);
+
+    std::unordered_map<ColorModeKey, ColorModeValue> mColorModes;
 };
 
 struct DisplayDeviceState {
@@ -310,10 +355,6 @@ public:
     bool isSecure() const override { return mDevice->isSecure(); }
     bool needsFiltering() const override { return mDevice->needsFiltering(); }
     Rect getSourceCrop() const override { return mSourceCrop; }
-    bool getWideColorSupport() const override { return mDevice->hasWideColorGamut(); }
-    ui::Dataspace getDataSpace() const override {
-        return mDevice->getCompositionDataSpace();
-    }
     int32_t getDisplayType() { return mDevice->getDisplayType(); }
     uint32_t getPanelMountFlip() { return mDevice->getPanelMountFlip(); }
     std::string getType() const override { return "DisplayRenderArea"; }

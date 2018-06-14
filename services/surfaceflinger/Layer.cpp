@@ -124,7 +124,6 @@ Layer::Layer(SurfaceFlinger* flinger, const sp<Client>& client, const String8& n
     mCurrentState.layerStack = 0;
     mCurrentState.sequence = 0;
     mCurrentState.requested = mCurrentState.active;
-    mCurrentState.dataSpace = ui::Dataspace::UNKNOWN;
     mCurrentState.appId = 0;
     mCurrentState.type = 0;
 
@@ -636,12 +635,10 @@ void Layer::setGeometry(const sp<const DisplayDevice>& displayDevice, uint32_t z
     if (orientation & Transform::ROT_INVALID) {
         // we can only handle simple transformation
         hwcInfo.forceClientComposition = true;
-        hwcInfo.invalidRotation = true;
     } else {
         auto transform = static_cast<HWC2::Transform>(orientation);
         hwcInfo.transform = transform;
         auto error = hwcLayer->setTransform(transform);
-        hwcInfo.invalidRotation = false;
         ALOGE_IF(error != HWC2::Error::None,
                  "[%s] Failed to set transform %s: "
                  "%s (%d)",
@@ -1336,19 +1333,6 @@ bool Layer::setLayerStack(uint32_t layerStack) {
     return true;
 }
 
-bool Layer::setDataSpace(ui::Dataspace dataSpace) {
-    if (mCurrentState.dataSpace == dataSpace) return false;
-    mCurrentState.sequence++;
-    mCurrentState.dataSpace = dataSpace;
-    mCurrentState.modified = true;
-    setTransactionFlags(eTransactionNeeded);
-    return true;
-}
-
-ui::Dataspace Layer::getDataSpace() const {
-    return mCurrentState.dataSpace;
-}
-
 uint32_t Layer::getLayerStack() const {
     auto p = mDrawingParent.promote();
     if (p == nullptr) {
@@ -1441,7 +1425,7 @@ LayerDebugInfo Layer::getLayerDebugInfo() const {
     info.mColor = ds.color;
     info.mFlags = ds.flags;
     info.mPixelFormat = getPixelFormat();
-    info.mDataSpace = static_cast<android_dataspace>(getDataSpace());
+    info.mDataSpace = static_cast<android_dataspace>(mCurrentDataSpace);
     info.mMatrix[0][0] = ds.active.transform[0][0];
     info.mMatrix[0][1] = ds.active.transform[0][1];
     info.mMatrix[1][0] = ds.active.transform[1][0];
@@ -1540,10 +1524,16 @@ void Layer::dumpFrameEvents(String8& result) {
 void Layer::onDisconnect() {
     Mutex::Autolock lock(mFrameEventHistoryMutex);
     mFrameEventHistory.onDisconnect();
+    mTimeStats.onDisconnect(getName().c_str());
 }
 
 void Layer::addAndGetFrameTimestamps(const NewFrameEventsEntry* newTimestamps,
                                      FrameEventHistoryDelta* outDelta) {
+    if (newTimestamps) {
+        mTimeStats.setPostTime(getName().c_str(), newTimestamps->frameNumber,
+                               newTimestamps->postedTime);
+    }
+
     Mutex::Autolock lock(mFrameEventHistoryMutex);
     if (newTimestamps) {
         // If there are any unsignaled fences in the aquire timeline at this
@@ -1652,9 +1642,10 @@ bool Layer::detachChildren() {
     return true;
 }
 
-bool Layer::isLegacySrgbDataSpace() const {
-    return mDrawingState.dataSpace == ui::Dataspace::SRGB ||
-        mDrawingState.dataSpace == ui::Dataspace::SRGB_LINEAR;
+bool Layer::isLegacyDataSpace() const {
+    // return true when no higher bits are set
+    return !(mCurrentDataSpace & (ui::Dataspace::STANDARD_MASK |
+                ui::Dataspace::TRANSFER_MASK | ui::Dataspace::RANGE_MASK));
 }
 
 void Layer::setParent(const sp<Layer>& layer) {
@@ -1964,7 +1955,10 @@ void Layer::writeToProto(LayerProto* layerInfo, LayerVector::StateSet stateSet,
 
     layerInfo->set_is_opaque(isOpaque(state));
     layerInfo->set_invalidate(contentDirty);
-    layerInfo->set_dataspace(dataspaceDetails(static_cast<android_dataspace>(getDataSpace())));
+
+    // XXX (b/79210409) mCurrentDataSpace is not protected
+    layerInfo->set_dataspace(dataspaceDetails(static_cast<android_dataspace>(mCurrentDataSpace)));
+
     layerInfo->set_pixel_format(decodePixelFormat(getPixelFormat()));
     LayerProtoHelper::writeToProto(getColor(), layerInfo->mutable_color());
     LayerProtoHelper::writeToProto(state.color, layerInfo->mutable_requested_color());
@@ -1983,6 +1977,7 @@ void Layer::writeToProto(LayerProto* layerInfo, LayerVector::StateSet stateSet,
         layerInfo->set_z_order_relative_of(zOrderRelativeOf->sequence);
     }
 
+    // XXX getBE().compositionInfo.mBuffer is not protected
     auto buffer = getBE().compositionInfo.mBuffer;
     if (buffer != nullptr) {
         LayerProtoHelper::writeToProto(buffer, layerInfo->mutable_active_buffer());
@@ -2017,15 +2012,6 @@ void Layer::writeToProto(LayerProto* layerInfo, int32_t hwcId) {
     } else {
         layerInfo->set_is_protected(false);
     }
-}
-
-void Layer::setColorInversionData(const sp<const DisplayDevice>& displayDevice)
-{
-  auto hwcId = displayDevice->getHwcDisplayId();
-  bool externalDisplay = (hwcId == DisplayDevice::DISPLAY_EXTERNAL);
-  auto& hwcInfo = getBE().mHwcLayers[hwcId];
-  mColorInversionOnExternal = externalDisplay && displayDevice->hasColorMatrix() &&
-                              !hwcInfo.invalidRotation;
 }
 
 // ---------------------------------------------------------------------------

@@ -75,6 +75,20 @@ protected:
     void setSourceY410BT2020(bool enable) override;
     void setSourceDataSpace(ui::Dataspace source) override;
     void setOutputDataSpace(ui::Dataspace dataspace) override;
+    void setDisplayMaxLuminance(const float maxLuminance) override;
+
+    virtual void setupLayerTexturing(const Texture& texture);
+    virtual void setupLayerBlackedOut();
+    virtual void setupFillWithColor(float r, float g, float b, float a);
+    virtual void setupColorTransform(const mat4& colorTransform);
+    virtual void setSaturationMatrix(const mat4& saturationMatrix);
+    virtual void disableTexturing();
+    virtual void disableBlending();
+
+    virtual void drawMesh(const Mesh& mesh);
+
+    virtual size_t getMaxTextureSize() const;
+    virtual size_t getMaxViewportDims() const;
 
     // Current dataspace of layer being rendered
     ui::Dataspace mDataSpace = ui::Dataspace::UNKNOWN;
@@ -85,19 +99,19 @@ protected:
     // Currently only supporting sRGB, BT2020 and DisplayP3 color spaces
     const bool mPlatformHasWideColor = false;
     mat4 mSrgbToDisplayP3;
-    mat4 mBt2020ToDisplayP3;
+    mat4 mDisplayP3ToSrgb;
+    mat3 mSrgbToXyz;
+    mat3 mBt2020ToXyz;
+    mat3 mDisplayP3ToXyz;
+    mat4 mXyzToSrgb;
+    mat4 mXyzToDisplayP3;
+    mat4 mXyzToBt2020;
 
-    virtual void setupLayerTexturing(const Texture& texture);
-    virtual void setupLayerBlackedOut();
-    virtual void setupFillWithColor(float r, float g, float b, float a);
-    virtual mat4 setupColorTransform(const mat4& colorTransform);
-    virtual void disableTexturing();
-    virtual void disableBlending();
-
-    virtual void drawMesh(const Mesh& mesh);
-
-    virtual size_t getMaxTextureSize() const;
-    virtual size_t getMaxViewportDims() const;
+private:
+    // A data space is considered HDR data space if it has BT2020 color space
+    // with PQ or HLG transfer function.
+    bool isHdrDataSpace(const ui::Dataspace dataSpace) const;
+    bool needsXYZTransformMatrix() const;
 };
 
 // ---------------------------------------------------------------------------

@@ -58,12 +58,13 @@ Program::Program(const ProgramCache::Key& /*needs*/, const char* vertex, const c
         mVertexShader = vertexId;
         mFragmentShader = fragmentId;
         mInitialized = true;
-
-        mColorMatrixLoc = glGetUniformLocation(programId, "colorMatrix");
         mProjectionMatrixLoc = glGetUniformLocation(programId, "projection");
         mTextureMatrixLoc = glGetUniformLocation(programId, "texture");
         mSamplerLoc = glGetUniformLocation(programId, "sampler");
         mColorLoc = glGetUniformLocation(programId, "color");
+        mDisplayMaxLuminanceLoc = glGetUniformLocation(programId, "displayMaxLuminance");
+        mInputTransformMatrixLoc = glGetUniformLocation(programId, "inputTransformMatrix");
+        mOutputTransformMatrixLoc = glGetUniformLocation(programId, "outputTransformMatrix");
 
         // set-up the default values for our uniforms
         glUseProgram(programId);
@@ -133,8 +134,28 @@ void Program::setUniforms(const Description& desc) {
         const float color[4] = {desc.mColor.r, desc.mColor.g, desc.mColor.b, desc.mColor.a};
         glUniform4fv(mColorLoc, 1, color);
     }
-    if (mColorMatrixLoc >= 0) {
-        glUniformMatrix4fv(mColorMatrixLoc, 1, GL_FALSE, desc.mColorMatrix.asArray());
+    if (mInputTransformMatrixLoc >= 0) {
+        // If the input transform matrix is not identity matrix, we want to merge
+        // the saturation matrix with input transform matrix so that the saturation
+        // matrix is applied at the correct stage.
+        mat4 inputTransformMatrix = mat4(desc.mInputTransformMatrix) * desc.mSaturationMatrix;
+        glUniformMatrix4fv(mInputTransformMatrixLoc, 1, GL_FALSE, inputTransformMatrix.asArray());
+    }
+    if (mOutputTransformMatrixLoc >= 0) {
+        // The output transform matrix and color matrix can be combined as one matrix
+        // that is applied right before applying OETF.
+        mat4 outputTransformMatrix = desc.mColorMatrix * desc.mOutputTransformMatrix;
+        // If there is no input transform matrix, we want to merge the saturation
+        // matrix with output transform matrix to avoid extra matrix multiplication
+        // in shader.
+        if (mInputTransformMatrixLoc < 0) {
+            outputTransformMatrix *= desc.mSaturationMatrix;
+        }
+        glUniformMatrix4fv(mOutputTransformMatrixLoc, 1, GL_FALSE,
+                           outputTransformMatrix.asArray());
+    }
+    if (mDisplayMaxLuminanceLoc >= 0) {
+        glUniform1f(mDisplayMaxLuminanceLoc, desc.mDisplayMaxLuminance);
     }
     // these uniforms are always present
     glUniformMatrix4fv(mProjectionMatrixLoc, 1, GL_FALSE, desc.mProjectionMatrix.asArray());

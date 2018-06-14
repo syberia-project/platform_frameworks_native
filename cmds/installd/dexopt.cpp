@@ -309,7 +309,9 @@ static void run_dex2oat(int zip_fd, int oat_fd, int input_vdex_fd, int output_vd
     // If the runtime was requested to use libartd.so, we'll run dex2oatd, otherwise dex2oat.
     const char* dex2oat_bin = "/system/bin/dex2oat";
     constexpr const char* kDex2oatDebugPath = "/system/bin/dex2oatd";
-    if (is_debug_runtime() || (background_job_compile && is_debuggable_build())) {
+    // Do not use dex2oatd for release candidates (give dex2oat more soak time).
+    bool is_release = android::base::GetProperty("ro.build.version.codename", "") == "REL";
+    if (is_debug_runtime() || (background_job_compile && is_debuggable_build() && !is_release)) {
         if (access(kDex2oatDebugPath, X_OK) == 0) {
             dex2oat_bin = kDex2oatDebugPath;
         }
@@ -740,6 +742,7 @@ static constexpr int PROFMAN_BIN_RETURN_CODE_ERROR_LOCKING = 4;
 static void run_profman(const std::vector<unique_fd>& profile_fds,
                         const unique_fd& reference_profile_fd,
                         const std::vector<unique_fd>* apk_fds,
+                        const std::vector<std::string>* dex_locations,
                         bool copy_and_update) {
     const char* profman_bin = is_debug_runtime() ? "/system/bin/profmand" : "/system/bin/profman";
 
@@ -762,6 +765,13 @@ static void run_profman(const std::vector<unique_fd>& profile_fds,
         }
     }
 
+    std::vector<std::string> dex_location_args;
+    if (dex_locations != nullptr) {
+        for (size_t k = 0; k < dex_locations->size(); k++) {
+            dex_location_args.push_back("--dex-location=" + (*dex_locations)[k]);
+        }
+    }
+
     // program name, reference profile fd, the final NULL and the profile fds
     const char* argv[3 + profile_args.size() + apk_args.size() + (copy_and_update ? 1 : 0)];
     int i = 0;
@@ -773,9 +783,13 @@ static void run_profman(const std::vector<unique_fd>& profile_fds,
     for (size_t k = 0; k < apk_args.size(); k++) {
         argv[i++] = apk_args[k].c_str();
     }
+    for (size_t k = 0; k < dex_location_args.size(); k++) {
+        argv[i++] = dex_location_args[k].c_str();
+    }
     if (copy_and_update) {
         argv[i++] = "--copy-and-update-profile-key";
     }
+
     // Do not add after dex2oat_flags, they should override others for debugging.
     argv[i] = NULL;
 
@@ -787,20 +801,26 @@ static void run_profman(const std::vector<unique_fd>& profile_fds,
 [[ noreturn ]]
 static void run_profman_merge(const std::vector<unique_fd>& profiles_fd,
                               const unique_fd& reference_profile_fd,
-                              const std::vector<unique_fd>* apk_fds = nullptr) {
-    run_profman(profiles_fd, reference_profile_fd, apk_fds, /*copy_and_update*/false);
+                              const std::vector<unique_fd>* apk_fds = nullptr,
+                              const std::vector<std::string>* dex_locations = nullptr) {
+    run_profman(profiles_fd, reference_profile_fd, apk_fds, dex_locations,
+            /*copy_and_update*/false);
 }
 
 [[ noreturn ]]
 static void run_profman_copy_and_update(unique_fd&& profile_fd,
                                         unique_fd&& reference_profile_fd,
-                                        unique_fd&& apk_fd) {
+                                        unique_fd&& apk_fd,
+                                        const std::string& dex_location) {
     std::vector<unique_fd> profiles_fd;
     profiles_fd.push_back(std::move(profile_fd));
     std::vector<unique_fd> apk_fds;
     apk_fds.push_back(std::move(apk_fd));
+    std::vector<std::string> dex_locations;
+    dex_locations.push_back(dex_location);
 
-    run_profman(profiles_fd, reference_profile_fd, &apk_fds, /*copy_and_update*/true);
+    run_profman(profiles_fd, reference_profile_fd, &apk_fds, &dex_locations,
+            /*copy_and_update*/true);
 }
 
 // Decides if profile guided compilation is needed or not based on existing profiles.
@@ -2598,7 +2618,8 @@ bool create_cache_path_default(char path[PKG_PATH_MAX], const char *src,
     }
 }
 
-bool open_classpath_files(const std::string& classpath, std::vector<unique_fd>* apk_fds) {
+bool open_classpath_files(const std::string& classpath, std::vector<unique_fd>* apk_fds,
+        std::vector<std::string>* dex_locations) {
     std::vector<std::string> classpaths_elems = base::Split(classpath, ":");
     for (const std::string& elem : classpaths_elems) {
         unique_fd fd(TEMP_FAILURE_RETRY(open(elem.c_str(), O_RDONLY)));
@@ -2607,6 +2628,7 @@ bool open_classpath_files(const std::string& classpath, std::vector<unique_fd>* 
             return false;
         } else {
             apk_fds->push_back(std::move(fd));
+            dex_locations->push_back(elem);
         }
     }
     return true;
@@ -2636,7 +2658,8 @@ static bool create_app_profile_snapshot(int32_t app_id,
     // Open the class paths elements. These will be used to filter out profile data that does
     // not belong to the classpath during merge.
     std::vector<unique_fd> apk_fds;
-    if (!open_classpath_files(classpath, &apk_fds)) {
+    std::vector<std::string> dex_locations;
+    if (!open_classpath_files(classpath, &apk_fds, &dex_locations)) {
         return false;
     }
 
@@ -2644,7 +2667,7 @@ static bool create_app_profile_snapshot(int32_t app_id,
     if (pid == 0) {
         /* child -- drop privileges before continuing */
         drop_capabilities(app_shared_gid);
-        run_profman_merge(profiles_fd, snapshot_fd, &apk_fds);
+        run_profman_merge(profiles_fd, snapshot_fd, &apk_fds, &dex_locations);
     }
 
     /* parent */
@@ -2694,7 +2717,8 @@ static bool create_boot_image_profile_snapshot(const std::string& package_name,
     // Open the classpath elements. These will be used to filter out profile data that does
     // not belong to the classpath during merge.
     std::vector<unique_fd> apk_fds;
-    if (!open_classpath_files(classpath, &apk_fds)) {
+    std::vector<std::string> dex_locations;
+    if (!open_classpath_files(classpath, &apk_fds, &dex_locations)) {
         return false;
     }
 
@@ -2721,7 +2745,9 @@ static bool create_boot_image_profile_snapshot(const std::string& package_name,
             /* child -- drop privileges before continuing */
             drop_capabilities(AID_SYSTEM);
 
-            run_profman_merge(profiles_fd, snapshot_fd, &apk_fds);
+            // The introduction of new access flags into boot jars causes them to
+            // fail dex file verification.
+            run_profman_merge(profiles_fd, snapshot_fd, &apk_fds, &dex_locations);
         }
 
         /* parent */
@@ -2784,7 +2810,8 @@ bool prepare_app_profile(const std::string& package_name,
         // The copy and update takes ownership over the fds.
         run_profman_copy_and_update(std::move(dex_metadata_fd),
                                     std::move(ref_profile_fd),
-                                    std::move(apk_fd));
+                                    std::move(apk_fd),
+                                    code_path);
     }
 
     /* parent */

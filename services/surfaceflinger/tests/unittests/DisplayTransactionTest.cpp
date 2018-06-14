@@ -45,11 +45,12 @@ using testing::Mock;
 using testing::Return;
 using testing::SetArgPointee;
 
-using android::hardware::graphics::common::V1_0::Hdr;
-using android::hardware::graphics::common::V1_1::ColorMode;
+using android::Hwc2::ColorMode;
 using android::Hwc2::Error;
+using android::Hwc2::Hdr;
 using android::Hwc2::IComposer;
 using android::Hwc2::IComposerClient;
+using android::Hwc2::PerFrameMetadataKey;
 using android::Hwc2::RenderIntent;
 
 using FakeDisplayDeviceInjector = TestableSurfaceFlinger::FakeDisplayDeviceInjector;
@@ -60,6 +61,8 @@ using HWC2Display = TestableSurfaceFlinger::HWC2Display;
 constexpr int32_t DEFAULT_REFRESH_RATE = 16'666'666;
 constexpr int32_t DEFAULT_DPI = 320;
 constexpr int DEFAULT_VIRTUAL_DISPLAY_SURFACE_FORMAT = HAL_PIXEL_FORMAT_RGB_565;
+
+constexpr int HWC_POWER_MODE_LEET = 1337; // An out of range power mode value
 
 /* ------------------------------------------------------------------------
  * Boolean avoidance
@@ -303,11 +306,7 @@ struct HwcDisplayVariant {
     static constexpr HWC2::DisplayType HWC_DISPLAY_TYPE = hwcDisplayType;
 
     // The HWC active configuration id
-    // TODO(b/69807179): SurfaceFlinger does not correctly get the active
-    // config. Once it does, change this to non-zero so that it is properly
-    // covered.
-    // static constexpr int HWC_ACTIVE_CONFIG_ID = 2001;
-    static constexpr int HWC_ACTIVE_CONFIG_ID = 0;
+    static constexpr int HWC_ACTIVE_CONFIG_ID = 2001;
 
     static void injectPendingHotplugEvent(DisplayTransactionTest* test,
                                           HWC2::Connection connection) {
@@ -359,13 +358,11 @@ struct HwcDisplayVariant {
     // Called by tests to set up HWC call expectations
     static void setupHwcGetActiveConfigCallExpectations(DisplayTransactionTest* test) {
         EXPECT_CALL(*test->mComposer, getActiveConfig(HWC_DISPLAY_ID, _))
-                .WillOnce(DoAll(SetArgPointee<1>(HWC_ACTIVE_CONFIG_ID), Return(Error::NONE)));
+                .WillRepeatedly(DoAll(SetArgPointee<1>(HWC_ACTIVE_CONFIG_ID), Return(Error::NONE)));
     }
 };
 
 struct NonHwcDisplayVariant {
-    static constexpr int HWC_ACTIVE_CONFIG_ID = 0;
-
     static void injectHwcDisplay(DisplayTransactionTest*) {}
 
     static void setupHwcGetActiveConfigCallExpectations(DisplayTransactionTest* test) {
@@ -385,6 +382,11 @@ struct PhysicalDisplayVariant
         public HwcDisplayVariant<hwcDisplayId, HWC2::DisplayType::Physical,
                                  DisplayVariant<type, type, width, height, critical, Async::FALSE,
                                                 Secure::TRUE, GRALLOC_USAGE_PHYSICAL_DISPLAY>> {};
+
+// An invalid display
+using InvalidDisplayVariant =
+        DisplayVariant<DisplayDevice::DISPLAY_ID_INVALID, DisplayDevice::DISPLAY_ID_INVALID, 0, 0,
+                       Critical::FALSE, Async::FALSE, Secure::FALSE, 0>;
 
 // A primary display is a physical display that is critical
 using PrimaryDisplayVariant =
@@ -489,33 +491,6 @@ struct WideColorP3ColorimetricSupportedVariant {
     }
 };
 
-// For this variant, SurfaceFlinger should configure itself with wide color
-// display support, and the display should respond with an non-empty list of
-// supported color modes.
-template <typename Display>
-struct WideColorP3EnhanceSupportedVariant {
-    static constexpr bool WIDE_COLOR_SUPPORTED = true;
-
-    static void injectConfigChange(DisplayTransactionTest* test) {
-        test->mFlinger.mutableHasWideColorDisplay() = true;
-        test->mFlinger.mutableDisplayColorSetting() = DisplayColorSetting::ENHANCED;
-    }
-
-    static void setupComposerCallExpectations(DisplayTransactionTest* test) {
-        EXPECT_CALL(*test->mComposer, getColorModes(Display::HWC_DISPLAY_ID, _))
-                .WillOnce(DoAll(SetArgPointee<1>(std::vector<ColorMode>({ColorMode::DISPLAY_P3})),
-                                Return(Error::NONE)));
-        EXPECT_CALL(*test->mComposer,
-                    getRenderIntents(Display::HWC_DISPLAY_ID, ColorMode::DISPLAY_P3, _))
-                .WillOnce(
-                        DoAll(SetArgPointee<2>(std::vector<RenderIntent>({RenderIntent::ENHANCE})),
-                              Return(Error::NONE)));
-        EXPECT_CALL(*test->mComposer,
-                    setColorMode(Display::HWC_DISPLAY_ID, ColorMode::SRGB, RenderIntent::ENHANCE))
-                .WillOnce(Return(Error::NONE));
-    }
-};
-
 // For this variant, SurfaceFlinger should configure itself with wide display
 // support, but the display should respond with an empty list of supported color
 // modes. Wide-color support for the display should not be configured.
@@ -530,10 +505,7 @@ struct WideColorNotSupportedVariant {
     static void setupComposerCallExpectations(DisplayTransactionTest* test) {
         EXPECT_CALL(*test->mComposer, getColorModes(Display::HWC_DISPLAY_ID, _))
                 .WillOnce(DoAll(SetArgPointee<1>(std::vector<ColorMode>()), Return(Error::NONE)));
-        EXPECT_CALL(*test->mComposer,
-                    setColorMode(Display::HWC_DISPLAY_ID, ColorMode::NATIVE,
-                                 RenderIntent::COLORIMETRIC))
-                .WillOnce(Return(Error::NONE));
+        EXPECT_CALL(*test->mComposer, setColorMode(_, _, _)).Times(0);
     }
 };
 
@@ -603,49 +575,118 @@ struct HdrNotSupportedVariant {
     }
 };
 
+struct NonHwcPerFrameMetadataSupportVariant {
+    static constexpr int PER_FRAME_METADATA_KEYS = 0;
+    static void setupComposerCallExpectations(DisplayTransactionTest* test) {
+        EXPECT_CALL(*test->mComposer, getPerFrameMetadataKeys(_, _)).Times(0);
+    }
+};
+
+template <typename Display>
+struct NoPerFrameMetadataSupportVariant {
+    static constexpr int PER_FRAME_METADATA_KEYS = 0;
+    static void setupComposerCallExpectations(DisplayTransactionTest* test) {
+        EXPECT_CALL(*test->mComposer, getPerFrameMetadataKeys(Display::HWC_DISPLAY_ID, _))
+                .WillOnce(DoAll(SetArgPointee<1>(std::vector<PerFrameMetadataKey>()),
+                                Return(Error::NONE)));
+    }
+};
+
+template <typename Display>
+struct Smpte2086PerFrameMetadataSupportVariant {
+    static constexpr int PER_FRAME_METADATA_KEYS = HdrMetadata::Type::SMPTE2086;
+    static void setupComposerCallExpectations(DisplayTransactionTest* test) {
+        EXPECT_CALL(*test->mComposer, getPerFrameMetadataKeys(Display::HWC_DISPLAY_ID, _))
+                .WillOnce(DoAll(SetArgPointee<1>(std::vector<PerFrameMetadataKey>({
+                                        PerFrameMetadataKey::DISPLAY_RED_PRIMARY_X,
+                                        PerFrameMetadataKey::DISPLAY_RED_PRIMARY_Y,
+                                        PerFrameMetadataKey::DISPLAY_GREEN_PRIMARY_X,
+                                        PerFrameMetadataKey::DISPLAY_GREEN_PRIMARY_Y,
+                                        PerFrameMetadataKey::DISPLAY_BLUE_PRIMARY_X,
+                                        PerFrameMetadataKey::DISPLAY_BLUE_PRIMARY_Y,
+                                        PerFrameMetadataKey::WHITE_POINT_X,
+                                        PerFrameMetadataKey::WHITE_POINT_Y,
+                                        PerFrameMetadataKey::MAX_LUMINANCE,
+                                        PerFrameMetadataKey::MIN_LUMINANCE,
+                                })),
+                                Return(Error::NONE)));
+    }
+};
+
+template <typename Display>
+struct Cta861_3_PerFrameMetadataSupportVariant {
+    static constexpr int PER_FRAME_METADATA_KEYS = HdrMetadata::Type::CTA861_3;
+    static void setupComposerCallExpectations(DisplayTransactionTest* test) {
+        EXPECT_CALL(*test->mComposer, getPerFrameMetadataKeys(Display::HWC_DISPLAY_ID, _))
+                .WillOnce(DoAll(SetArgPointee<1>(std::vector<PerFrameMetadataKey>({
+                                        PerFrameMetadataKey::MAX_CONTENT_LIGHT_LEVEL,
+                                        PerFrameMetadataKey::MAX_FRAME_AVERAGE_LIGHT_LEVEL,
+                                })),
+                                Return(Error::NONE)));
+    }
+};
+
 /* ------------------------------------------------------------------------
  * Typical display configurations to test
  */
 
-template <typename DisplayPolicy, typename WideColorSupportPolicy, typename HdrSupportPolicy>
+template <typename DisplayPolicy, typename WideColorSupportPolicy, typename HdrSupportPolicy,
+          typename PerFrameMetadataSupportPolicy>
 struct Case {
     using Display = DisplayPolicy;
     using WideColorSupport = WideColorSupportPolicy;
     using HdrSupport = HdrSupportPolicy;
+    using PerFrameMetadataSupport = PerFrameMetadataSupportPolicy;
 };
 
 using SimplePrimaryDisplayCase =
         Case<PrimaryDisplayVariant, WideColorNotSupportedVariant<PrimaryDisplayVariant>,
-             HdrNotSupportedVariant<PrimaryDisplayVariant>>;
+             HdrNotSupportedVariant<PrimaryDisplayVariant>,
+             NoPerFrameMetadataSupportVariant<PrimaryDisplayVariant>>;
 using SimpleExternalDisplayCase =
         Case<ExternalDisplayVariant, WideColorNotSupportedVariant<ExternalDisplayVariant>,
-             HdrNotSupportedVariant<ExternalDisplayVariant>>;
+             HdrNotSupportedVariant<ExternalDisplayVariant>,
+             NoPerFrameMetadataSupportVariant<ExternalDisplayVariant>>;
 using SimpleTertiaryDisplayCase =
         Case<TertiaryDisplayVariant, WideColorNotSupportedVariant<TertiaryDisplayVariant>,
-             HdrNotSupportedVariant<TertiaryDisplayVariant>>;
+             HdrNotSupportedVariant<TertiaryDisplayVariant>,
+             NoPerFrameMetadataSupportVariant<TertiaryDisplayVariant>>;
 using NonHwcVirtualDisplayCase =
         Case<NonHwcVirtualDisplayVariant<1024, 768, Secure::FALSE>,
-             WideColorSupportNotConfiguredVariant, NonHwcDisplayHdrSupportVariant>;
+             WideColorSupportNotConfiguredVariant, NonHwcDisplayHdrSupportVariant,
+             NonHwcPerFrameMetadataSupportVariant>;
 using SimpleHwcVirtualDisplayVariant = HwcVirtualDisplayVariant<1024, 768, Secure::TRUE>;
 using HwcVirtualDisplayCase =
         Case<SimpleHwcVirtualDisplayVariant, WideColorSupportNotConfiguredVariant,
-             HdrNotSupportedVariant<SimpleHwcVirtualDisplayVariant>>;
+             HdrNotSupportedVariant<SimpleHwcVirtualDisplayVariant>,
+             NoPerFrameMetadataSupportVariant<SimpleHwcVirtualDisplayVariant>>;
 using WideColorP3ColorimetricDisplayCase =
         Case<PrimaryDisplayVariant, WideColorP3ColorimetricSupportedVariant<PrimaryDisplayVariant>,
-             HdrNotSupportedVariant<PrimaryDisplayVariant>>;
-using WideColorP3EnhanceDisplayCase =
-        Case<PrimaryDisplayVariant, WideColorP3EnhanceSupportedVariant<PrimaryDisplayVariant>,
-             HdrNotSupportedVariant<PrimaryDisplayVariant>>;
+             HdrNotSupportedVariant<PrimaryDisplayVariant>,
+             NoPerFrameMetadataSupportVariant<PrimaryDisplayVariant>>;
 using Hdr10DisplayCase =
         Case<PrimaryDisplayVariant, WideColorNotSupportedVariant<PrimaryDisplayVariant>,
-             Hdr10SupportedVariant<PrimaryDisplayVariant>>;
+             Hdr10SupportedVariant<PrimaryDisplayVariant>,
+             NoPerFrameMetadataSupportVariant<PrimaryDisplayVariant>>;
 using HdrHlgDisplayCase =
         Case<PrimaryDisplayVariant, WideColorNotSupportedVariant<PrimaryDisplayVariant>,
-             HdrHlgSupportedVariant<PrimaryDisplayVariant>>;
+             HdrHlgSupportedVariant<PrimaryDisplayVariant>,
+             NoPerFrameMetadataSupportVariant<PrimaryDisplayVariant>>;
 using HdrDolbyVisionDisplayCase =
         Case<PrimaryDisplayVariant, WideColorNotSupportedVariant<PrimaryDisplayVariant>,
-             HdrDolbyVisionSupportedVariant<PrimaryDisplayVariant>>;
-
+             HdrDolbyVisionSupportedVariant<PrimaryDisplayVariant>,
+             NoPerFrameMetadataSupportVariant<PrimaryDisplayVariant>>;
+using HdrSmpte2086DisplayCase =
+        Case<PrimaryDisplayVariant, WideColorNotSupportedVariant<PrimaryDisplayVariant>,
+             HdrNotSupportedVariant<PrimaryDisplayVariant>,
+             Smpte2086PerFrameMetadataSupportVariant<PrimaryDisplayVariant>>;
+using HdrCta861_3_DisplayCase =
+        Case<PrimaryDisplayVariant, WideColorNotSupportedVariant<PrimaryDisplayVariant>,
+             HdrNotSupportedVariant<PrimaryDisplayVariant>,
+             Cta861_3_PerFrameMetadataSupportVariant<PrimaryDisplayVariant>>;
+using InvalidDisplayCase = Case<InvalidDisplayVariant, WideColorSupportNotConfiguredVariant,
+                                NonHwcDisplayHdrSupportVariant,
+                                NoPerFrameMetadataSupportVariant<InvalidDisplayVariant>>;
 /* ------------------------------------------------------------------------
  *
  * SurfaceFlinger::onHotplugReceived
@@ -983,12 +1024,10 @@ void SetupNewDisplayDeviceInternalTest::setupNewDisplayDeviceInternalTest() {
 
     // Various native window calls will be made.
     Case::Display::setupNativeWindowSurfaceCreationCallExpectations(this);
-
-    // TODO(b/69807179): SurfaceFlinger does not correctly get the active config.
-    // Case::Display::setupHwcGetActiveConfigCallExpectations(this)
-
+    Case::Display::setupHwcGetActiveConfigCallExpectations(this);
     Case::WideColorSupport::setupComposerCallExpectations(this);
     Case::HdrSupport::setupComposerCallExpectations(this);
+    Case::PerFrameMetadataSupport::setupComposerCallExpectations(this);
 
     // --------------------------------------------------------------------
     // Invocation
@@ -1009,7 +1048,12 @@ void SetupNewDisplayDeviceInternalTest::setupNewDisplayDeviceInternalTest() {
     EXPECT_EQ(Case::HdrSupport::HDR10_SUPPORTED, device->hasHDR10Support());
     EXPECT_EQ(Case::HdrSupport::HDR_HLG_SUPPORTED, device->hasHLGSupport());
     EXPECT_EQ(Case::HdrSupport::HDR_DOLBY_VISION_SUPPORTED, device->hasDolbyVisionSupport());
-    EXPECT_EQ(Case::Display::HWC_ACTIVE_CONFIG_ID, device->getActiveConfig());
+    // Note: This is not Case::Display::HWC_ACTIVE_CONFIG_ID as the ids are
+    // remapped, and the test only ever sets up one config. If there were an error
+    // looking up the remapped index, device->getActiveConfig() would be -1 instead.
+    EXPECT_EQ(0, device->getActiveConfig());
+    EXPECT_EQ(Case::PerFrameMetadataSupport::PER_FRAME_METADATA_KEYS,
+              device->getSupportedPerFrameMetadata());
 }
 
 TEST_F(SetupNewDisplayDeviceInternalTest, createSimplePrimaryDisplay) {
@@ -1036,10 +1080,6 @@ TEST_F(SetupNewDisplayDeviceInternalTest, createWideColorP3Display) {
     setupNewDisplayDeviceInternalTest<WideColorP3ColorimetricDisplayCase>();
 }
 
-TEST_F(SetupNewDisplayDeviceInternalTest, createWideColorP3EnhanceDisplay) {
-    setupNewDisplayDeviceInternalTest<WideColorP3EnhanceDisplayCase>();
-}
-
 TEST_F(SetupNewDisplayDeviceInternalTest, createHdr10Display) {
     setupNewDisplayDeviceInternalTest<Hdr10DisplayCase>();
 }
@@ -1050,6 +1090,14 @@ TEST_F(SetupNewDisplayDeviceInternalTest, createHdrHlgDisplay) {
 
 TEST_F(SetupNewDisplayDeviceInternalTest, createHdrDolbyVisionDisplay) {
     setupNewDisplayDeviceInternalTest<HdrDolbyVisionDisplayCase>();
+}
+
+TEST_F(SetupNewDisplayDeviceInternalTest, createHdrSmpte2086DisplayCase) {
+    setupNewDisplayDeviceInternalTest<HdrSmpte2086DisplayCase>();
+}
+
+TEST_F(SetupNewDisplayDeviceInternalTest, createHdrCta816_3_DisplayCase) {
+    setupNewDisplayDeviceInternalTest<HdrCta861_3_DisplayCase>();
 }
 
 /* ------------------------------------------------------------------------
@@ -1109,6 +1157,7 @@ void HandleTransactionLockedTest::setupCommonCallExpectationsForConnectProcessin
 
     Case::WideColorSupport::setupComposerCallExpectations(this);
     Case::HdrSupport::setupComposerCallExpectations(this);
+    Case::PerFrameMetadataSupport::setupComposerCallExpectations(this);
 
     EXPECT_CALL(*mSurfaceInterceptor, saveDisplayCreation(_)).Times(1);
     EXPECT_CALL(*mEventThread, onHotplugReceived(Case::Display::TYPE, true)).Times(1);
@@ -1448,6 +1497,7 @@ TEST_F(HandleTransactionLockedTest, processesVirtualDisplayAdded) {
     Case::Display::setupHwcVirtualDisplayCreationCallExpectations(this);
     Case::WideColorSupport::setupComposerCallExpectations(this);
     Case::HdrSupport::setupComposerCallExpectations(this);
+    Case::PerFrameMetadataSupport::setupComposerCallExpectations(this);
 
     // --------------------------------------------------------------------
     // Invocation
@@ -1560,7 +1610,7 @@ TEST_F(HandleTransactionLockedTest, processesDisplayLayerStackChanges) {
     // --------------------------------------------------------------------
     // Postconditions
 
-    EXPECT_EQ(newLayerStack, getDisplayDevice(display.token())->getLayerStack());
+    EXPECT_EQ(newLayerStack, display.mutableDisplayDevice()->getLayerStack());
 }
 
 TEST_F(HandleTransactionLockedTest, processesDisplayTransformChanges) {
@@ -1588,7 +1638,7 @@ TEST_F(HandleTransactionLockedTest, processesDisplayTransformChanges) {
     // --------------------------------------------------------------------
     // Postconditions
 
-    EXPECT_EQ(newTransform, getDisplayDevice(display.token())->getOrientation());
+    EXPECT_EQ(newTransform, display.mutableDisplayDevice()->getOrientation());
 }
 
 TEST_F(HandleTransactionLockedTest, processesDisplayViewportChanges) {
@@ -1616,7 +1666,7 @@ TEST_F(HandleTransactionLockedTest, processesDisplayViewportChanges) {
     // --------------------------------------------------------------------
     // Postconditions
 
-    EXPECT_EQ(newViewport, getDisplayDevice(display.token())->getViewport());
+    EXPECT_EQ(newViewport, display.mutableDisplayDevice()->getViewport());
 }
 
 TEST_F(HandleTransactionLockedTest, processesDisplayFrameChanges) {
@@ -1644,7 +1694,7 @@ TEST_F(HandleTransactionLockedTest, processesDisplayFrameChanges) {
     // --------------------------------------------------------------------
     // Postconditions
 
-    EXPECT_EQ(newFrame, getDisplayDevice(display.token())->getFrame());
+    EXPECT_EQ(newFrame, display.mutableDisplayDevice()->getFrame());
 }
 
 TEST_F(HandleTransactionLockedTest, processesDisplayWidthChanges) {
@@ -1727,6 +1777,1021 @@ TEST_F(HandleTransactionLockedTest, processesDisplayHeightChanges) {
     // Invocation
 
     mFlinger.handleTransactionLocked(eDisplayTransactionNeeded);
+}
+
+/* ------------------------------------------------------------------------
+ * SurfaceFlinger::setDisplayStateLocked
+ */
+
+TEST_F(DisplayTransactionTest, setDisplayStateLockedDoesNothingWithUnknownDisplay) {
+    // --------------------------------------------------------------------
+    // Preconditions
+
+    // We have an unknown display token not associated with a known display
+    sp<BBinder> displayToken = new BBinder();
+
+    // The requested display state references the unknown display.
+    DisplayState state;
+    state.what = DisplayState::eLayerStackChanged;
+    state.token = displayToken;
+    state.layerStack = 456;
+
+    // --------------------------------------------------------------------
+    // Invocation
+
+    uint32_t flags = mFlinger.setDisplayStateLocked(state);
+
+    // --------------------------------------------------------------------
+    // Postconditions
+
+    // The returned flags are empty
+    EXPECT_EQ(0u, flags);
+
+    // The display token still doesn't match anything known.
+    EXPECT_FALSE(hasCurrentDisplayState(displayToken));
+}
+
+TEST_F(DisplayTransactionTest, setDisplayStateLockedDoesNothingWithInvalidDisplay) {
+    using Case = InvalidDisplayCase;
+
+    // --------------------------------------------------------------------
+    // Preconditions
+
+    // An invalid display is set up
+    auto display = Case::Display::makeFakeExistingDisplayInjector(this);
+    display.inject();
+
+    // The invalid display has some state
+    display.mutableCurrentDisplayState().layerStack = 654u;
+
+    // The requested display state tries to change the display state.
+    DisplayState state;
+    state.what = DisplayState::eLayerStackChanged;
+    state.token = display.token();
+    state.layerStack = 456;
+
+    // --------------------------------------------------------------------
+    // Invocation
+
+    uint32_t flags = mFlinger.setDisplayStateLocked(state);
+
+    // --------------------------------------------------------------------
+    // Postconditions
+
+    // The returned flags are empty
+    EXPECT_EQ(0u, flags);
+
+    // The current display layer stack value is unchanged.
+    EXPECT_EQ(654u, getCurrentDisplayState(display.token()).layerStack);
+}
+
+TEST_F(DisplayTransactionTest, setDisplayStateLockedDoesNothingWhenNoChanges) {
+    using Case = SimplePrimaryDisplayCase;
+
+    // --------------------------------------------------------------------
+    // Preconditions
+
+    // A display is already set up
+    auto display = Case::Display::makeFakeExistingDisplayInjector(this);
+    display.inject();
+
+    // No changes are made to the display
+    DisplayState state;
+    state.what = 0;
+    state.token = display.token();
+
+    // --------------------------------------------------------------------
+    // Invocation
+
+    uint32_t flags = mFlinger.setDisplayStateLocked(state);
+
+    // --------------------------------------------------------------------
+    // Postconditions
+
+    // The returned flags are empty
+    EXPECT_EQ(0u, flags);
+}
+
+TEST_F(DisplayTransactionTest, setDisplayStateLockedDoesNothingIfSurfaceDidNotChange) {
+    using Case = SimplePrimaryDisplayCase;
+
+    // --------------------------------------------------------------------
+    // Preconditions
+
+    // A display is already set up
+    auto display = Case::Display::makeFakeExistingDisplayInjector(this);
+    display.inject();
+
+    // There is a surface that can be set.
+    sp<mock::GraphicBufferProducer> surface = new mock::GraphicBufferProducer();
+
+    // The current display state has the surface set
+    display.mutableCurrentDisplayState().surface = surface;
+
+    // The incoming request sets the same surface
+    DisplayState state;
+    state.what = DisplayState::eSurfaceChanged;
+    state.token = display.token();
+    state.surface = surface;
+
+    // --------------------------------------------------------------------
+    // Invocation
+
+    uint32_t flags = mFlinger.setDisplayStateLocked(state);
+
+    // --------------------------------------------------------------------
+    // Postconditions
+
+    // The returned flags are empty
+    EXPECT_EQ(0u, flags);
+
+    // The current display state is unchanged.
+    EXPECT_EQ(surface.get(), display.getCurrentDisplayState().surface.get());
+}
+
+TEST_F(DisplayTransactionTest, setDisplayStateLockedRequestsUpdateIfSurfaceChanged) {
+    using Case = SimplePrimaryDisplayCase;
+
+    // --------------------------------------------------------------------
+    // Preconditions
+
+    // A display is already set up
+    auto display = Case::Display::makeFakeExistingDisplayInjector(this);
+    display.inject();
+
+    // There is a surface that can be set.
+    sp<mock::GraphicBufferProducer> surface = new mock::GraphicBufferProducer();
+
+    // The current display state does not have a surface
+    display.mutableCurrentDisplayState().surface = nullptr;
+
+    // The incoming request sets a surface
+    DisplayState state;
+    state.what = DisplayState::eSurfaceChanged;
+    state.token = display.token();
+    state.surface = surface;
+
+    // --------------------------------------------------------------------
+    // Invocation
+
+    uint32_t flags = mFlinger.setDisplayStateLocked(state);
+
+    // --------------------------------------------------------------------
+    // Postconditions
+
+    // The returned flags indicate a transaction is needed
+    EXPECT_EQ(eDisplayTransactionNeeded, flags);
+
+    // The current display layer stack state is set to the new value
+    EXPECT_EQ(surface.get(), display.getCurrentDisplayState().surface.get());
+}
+
+TEST_F(DisplayTransactionTest, setDisplayStateLockedDoesNothingIfLayerStackDidNotChange) {
+    using Case = SimplePrimaryDisplayCase;
+
+    // --------------------------------------------------------------------
+    // Preconditions
+
+    // A display is already set up
+    auto display = Case::Display::makeFakeExistingDisplayInjector(this);
+    display.inject();
+
+    // The display has a layer stack set
+    display.mutableCurrentDisplayState().layerStack = 456u;
+
+    // The incoming request sets the same layer stack
+    DisplayState state;
+    state.what = DisplayState::eLayerStackChanged;
+    state.token = display.token();
+    state.layerStack = 456u;
+
+    // --------------------------------------------------------------------
+    // Invocation
+
+    uint32_t flags = mFlinger.setDisplayStateLocked(state);
+
+    // --------------------------------------------------------------------
+    // Postconditions
+
+    // The returned flags are empty
+    EXPECT_EQ(0u, flags);
+
+    // The current display state is unchanged
+    EXPECT_EQ(456u, display.getCurrentDisplayState().layerStack);
+}
+
+TEST_F(DisplayTransactionTest, setDisplayStateLockedRequestsUpdateIfLayerStackChanged) {
+    using Case = SimplePrimaryDisplayCase;
+
+    // --------------------------------------------------------------------
+    // Preconditions
+
+    // A display is set up
+    auto display = Case::Display::makeFakeExistingDisplayInjector(this);
+    display.inject();
+
+    // The display has a layer stack set
+    display.mutableCurrentDisplayState().layerStack = 654u;
+
+    // The incoming request sets a different layer stack
+    DisplayState state;
+    state.what = DisplayState::eLayerStackChanged;
+    state.token = display.token();
+    state.layerStack = 456u;
+
+    // --------------------------------------------------------------------
+    // Invocation
+
+    uint32_t flags = mFlinger.setDisplayStateLocked(state);
+
+    // --------------------------------------------------------------------
+    // Postconditions
+
+    // The returned flags indicate a transaction is needed
+    EXPECT_EQ(eDisplayTransactionNeeded, flags);
+
+    // The desired display state has been set to the new value.
+    EXPECT_EQ(456u, display.getCurrentDisplayState().layerStack);
+}
+
+TEST_F(DisplayTransactionTest, setDisplayStateLockedDoesNothingIfProjectionDidNotChange) {
+    using Case = SimplePrimaryDisplayCase;
+    constexpr int initialOrientation = 180;
+    const Rect initialFrame = {1, 2, 3, 4};
+    const Rect initialViewport = {5, 6, 7, 8};
+
+    // --------------------------------------------------------------------
+    // Preconditions
+
+    // A display is set up
+    auto display = Case::Display::makeFakeExistingDisplayInjector(this);
+    display.inject();
+
+    // The current display state projection state is all set
+    display.mutableCurrentDisplayState().orientation = initialOrientation;
+    display.mutableCurrentDisplayState().frame = initialFrame;
+    display.mutableCurrentDisplayState().viewport = initialViewport;
+
+    // The incoming request sets the same projection state
+    DisplayState state;
+    state.what = DisplayState::eDisplayProjectionChanged;
+    state.token = display.token();
+    state.orientation = initialOrientation;
+    state.frame = initialFrame;
+    state.viewport = initialViewport;
+
+    // --------------------------------------------------------------------
+    // Invocation
+
+    uint32_t flags = mFlinger.setDisplayStateLocked(state);
+
+    // --------------------------------------------------------------------
+    // Postconditions
+
+    // The returned flags are empty
+    EXPECT_EQ(0u, flags);
+
+    // The current display state is unchanged
+    EXPECT_EQ(initialOrientation, display.getCurrentDisplayState().orientation);
+
+    EXPECT_EQ(initialFrame, display.getCurrentDisplayState().frame);
+    EXPECT_EQ(initialViewport, display.getCurrentDisplayState().viewport);
+}
+
+TEST_F(DisplayTransactionTest, setDisplayStateLockedRequestsUpdateIfOrientationChanged) {
+    using Case = SimplePrimaryDisplayCase;
+    constexpr int initialOrientation = 90;
+    constexpr int desiredOrientation = 180;
+
+    // --------------------------------------------------------------------
+    // Preconditions
+
+    // A display is set up
+    auto display = Case::Display::makeFakeExistingDisplayInjector(this);
+    display.inject();
+
+    // The current display state has an orientation set
+    display.mutableCurrentDisplayState().orientation = initialOrientation;
+
+    // The incoming request sets a different orientation
+    DisplayState state;
+    state.what = DisplayState::eDisplayProjectionChanged;
+    state.token = display.token();
+    state.orientation = desiredOrientation;
+
+    // --------------------------------------------------------------------
+    // Invocation
+
+    uint32_t flags = mFlinger.setDisplayStateLocked(state);
+
+    // --------------------------------------------------------------------
+    // Postconditions
+
+    // The returned flags indicate a transaction is needed
+    EXPECT_EQ(eDisplayTransactionNeeded, flags);
+
+    // The current display state has the new value.
+    EXPECT_EQ(desiredOrientation, display.getCurrentDisplayState().orientation);
+}
+
+TEST_F(DisplayTransactionTest, setDisplayStateLockedRequestsUpdateIfFrameChanged) {
+    using Case = SimplePrimaryDisplayCase;
+    const Rect initialFrame = {0, 0, 0, 0};
+    const Rect desiredFrame = {5, 6, 7, 8};
+
+    // --------------------------------------------------------------------
+    // Preconditions
+
+    // A display is set up
+    auto display = Case::Display::makeFakeExistingDisplayInjector(this);
+    display.inject();
+
+    // The current display state does not have a frame
+    display.mutableCurrentDisplayState().frame = initialFrame;
+
+    // The incoming request sets a frame
+    DisplayState state;
+    state.what = DisplayState::eDisplayProjectionChanged;
+    state.token = display.token();
+    state.frame = desiredFrame;
+
+    // --------------------------------------------------------------------
+    // Invocation
+
+    uint32_t flags = mFlinger.setDisplayStateLocked(state);
+
+    // --------------------------------------------------------------------
+    // Postconditions
+
+    // The returned flags indicate a transaction is needed
+    EXPECT_EQ(eDisplayTransactionNeeded, flags);
+
+    // The current display state has the new value.
+    EXPECT_EQ(desiredFrame, display.getCurrentDisplayState().frame);
+}
+
+TEST_F(DisplayTransactionTest, setDisplayStateLockedRequestsUpdateIfViewportChanged) {
+    using Case = SimplePrimaryDisplayCase;
+    const Rect initialViewport = {0, 0, 0, 0};
+    const Rect desiredViewport = {5, 6, 7, 8};
+
+    // --------------------------------------------------------------------
+    // Preconditions
+
+    // A display is set up
+    auto display = Case::Display::makeFakeExistingDisplayInjector(this);
+    display.inject();
+
+    // The current display state does not have a viewport
+    display.mutableCurrentDisplayState().viewport = initialViewport;
+
+    // The incoming request sets a viewport
+    DisplayState state;
+    state.what = DisplayState::eDisplayProjectionChanged;
+    state.token = display.token();
+    state.viewport = desiredViewport;
+
+    // --------------------------------------------------------------------
+    // Invocation
+
+    uint32_t flags = mFlinger.setDisplayStateLocked(state);
+
+    // --------------------------------------------------------------------
+    // Postconditions
+
+    // The returned flags indicate a transaction is needed
+    EXPECT_EQ(eDisplayTransactionNeeded, flags);
+
+    // The current display state has the new value.
+    EXPECT_EQ(desiredViewport, display.getCurrentDisplayState().viewport);
+}
+
+TEST_F(DisplayTransactionTest, setDisplayStateLockedDoesNothingIfSizeDidNotChange) {
+    using Case = SimplePrimaryDisplayCase;
+    constexpr uint32_t initialWidth = 1024;
+    constexpr uint32_t initialHeight = 768;
+
+    // --------------------------------------------------------------------
+    // Preconditions
+
+    // A display is set up
+    auto display = Case::Display::makeFakeExistingDisplayInjector(this);
+    display.inject();
+
+    // The current display state has a size set
+    display.mutableCurrentDisplayState().width = initialWidth;
+    display.mutableCurrentDisplayState().height = initialHeight;
+
+    // The incoming request sets the same display size
+    DisplayState state;
+    state.what = DisplayState::eDisplaySizeChanged;
+    state.token = display.token();
+    state.width = initialWidth;
+    state.height = initialHeight;
+
+    // --------------------------------------------------------------------
+    // Invocation
+
+    uint32_t flags = mFlinger.setDisplayStateLocked(state);
+
+    // --------------------------------------------------------------------
+    // Postconditions
+
+    // The returned flags are empty
+    EXPECT_EQ(0u, flags);
+
+    // The current display state is unchanged
+    EXPECT_EQ(initialWidth, display.getCurrentDisplayState().width);
+    EXPECT_EQ(initialHeight, display.getCurrentDisplayState().height);
+}
+
+TEST_F(DisplayTransactionTest, setDisplayStateLockedRequestsUpdateIfWidthChanged) {
+    using Case = SimplePrimaryDisplayCase;
+    constexpr uint32_t initialWidth = 0;
+    constexpr uint32_t desiredWidth = 1024;
+
+    // --------------------------------------------------------------------
+    // Preconditions
+
+    // A display is set up
+    auto display = Case::Display::makeFakeExistingDisplayInjector(this);
+    display.inject();
+
+    // The display does not yet have a width
+    display.mutableCurrentDisplayState().width = initialWidth;
+
+    // The incoming request sets a display width
+    DisplayState state;
+    state.what = DisplayState::eDisplaySizeChanged;
+    state.token = display.token();
+    state.width = desiredWidth;
+
+    // --------------------------------------------------------------------
+    // Invocation
+
+    uint32_t flags = mFlinger.setDisplayStateLocked(state);
+
+    // --------------------------------------------------------------------
+    // Postconditions
+
+    // The returned flags indicate a transaction is needed
+    EXPECT_EQ(eDisplayTransactionNeeded, flags);
+
+    // The current display state has the new value.
+    EXPECT_EQ(desiredWidth, display.getCurrentDisplayState().width);
+}
+
+TEST_F(DisplayTransactionTest, setDisplayStateLockedRequestsUpdateIfHeightChanged) {
+    using Case = SimplePrimaryDisplayCase;
+    constexpr uint32_t initialHeight = 0;
+    constexpr uint32_t desiredHeight = 768;
+
+    // --------------------------------------------------------------------
+    // Preconditions
+
+    // A display is set up
+    auto display = Case::Display::makeFakeExistingDisplayInjector(this);
+    display.inject();
+
+    // The display does not yet have a height
+    display.mutableCurrentDisplayState().height = initialHeight;
+
+    // The incoming request sets a display height
+    DisplayState state;
+    state.what = DisplayState::eDisplaySizeChanged;
+    state.token = display.token();
+    state.height = desiredHeight;
+
+    // --------------------------------------------------------------------
+    // Invocation
+
+    uint32_t flags = mFlinger.setDisplayStateLocked(state);
+
+    // --------------------------------------------------------------------
+    // Postconditions
+
+    // The returned flags indicate a transaction is needed
+    EXPECT_EQ(eDisplayTransactionNeeded, flags);
+
+    // The current display state has the new value.
+    EXPECT_EQ(desiredHeight, display.getCurrentDisplayState().height);
+}
+
+/* ------------------------------------------------------------------------
+ * SurfaceFlinger::onInitializeDisplays
+ */
+
+TEST_F(DisplayTransactionTest, onInitializeDisplaysSetsUpPrimaryDisplay) {
+    using Case = SimplePrimaryDisplayCase;
+
+    // --------------------------------------------------------------------
+    // Preconditions
+
+    // A primary display is set up
+    Case::Display::injectHwcDisplay(this);
+    auto primaryDisplay = Case::Display::makeFakeExistingDisplayInjector(this);
+    primaryDisplay.inject();
+
+    // --------------------------------------------------------------------
+    // Call Expectations
+
+    // We expect the surface interceptor to possibly be used, but we treat it as
+    // disabled since it is called as a side effect rather than directly by this
+    // function.
+    EXPECT_CALL(*mSurfaceInterceptor, isEnabled()).WillOnce(Return(false));
+
+    // We expect a call to get the active display config.
+    Case::Display::setupHwcGetActiveConfigCallExpectations(this);
+
+    // We expect invalidate() to be invoked once to trigger display transaction
+    // processing.
+    EXPECT_CALL(*mMessageQueue, invalidate()).Times(1);
+
+    // --------------------------------------------------------------------
+    // Invocation
+
+    mFlinger.onInitializeDisplays();
+
+    // --------------------------------------------------------------------
+    // Postconditions
+
+    // The primary display should have a current state
+    ASSERT_TRUE(hasCurrentDisplayState(primaryDisplay.token()));
+    const auto& primaryDisplayState = getCurrentDisplayState(primaryDisplay.token());
+    // The layer stack state should be set to zero
+    EXPECT_EQ(0u, primaryDisplayState.layerStack);
+    // The orientation state should be set to zero
+    EXPECT_EQ(0, primaryDisplayState.orientation);
+
+    // The frame state should be set to INVALID
+    EXPECT_EQ(Rect::INVALID_RECT, primaryDisplayState.frame);
+
+    // The viewport state should be set to INVALID
+    EXPECT_EQ(Rect::INVALID_RECT, primaryDisplayState.viewport);
+
+    // The width and height should both be zero
+    EXPECT_EQ(0u, primaryDisplayState.width);
+    EXPECT_EQ(0u, primaryDisplayState.height);
+
+    // The display should be set to HWC_POWER_MODE_NORMAL
+    ASSERT_TRUE(hasDisplayDevice(primaryDisplay.token()));
+    auto displayDevice = primaryDisplay.mutableDisplayDevice();
+    EXPECT_EQ(HWC_POWER_MODE_NORMAL, displayDevice->getPowerMode());
+
+    // The display refresh period should be set in the frame tracker.
+    FrameStats stats;
+    mFlinger.getAnimFrameTracker().getStats(&stats);
+    EXPECT_EQ(DEFAULT_REFRESH_RATE, stats.refreshPeriodNano);
+
+    // The display transaction needed flag should be set.
+    EXPECT_TRUE(hasTransactionFlagSet(eDisplayTransactionNeeded));
+
+    // The compositor timing should be set to default values
+    const auto& compositorTiming = mFlinger.getCompositorTiming();
+    EXPECT_EQ(-DEFAULT_REFRESH_RATE, compositorTiming.deadline);
+    EXPECT_EQ(DEFAULT_REFRESH_RATE, compositorTiming.interval);
+    EXPECT_EQ(DEFAULT_REFRESH_RATE, compositorTiming.presentLatency);
+}
+
+/* ------------------------------------------------------------------------
+ * SurfaceFlinger::setPowerModeInternal
+ */
+
+// Used when we simulate a display that supports doze.
+struct DozeIsSupportedVariant {
+    static constexpr bool DOZE_SUPPORTED = true;
+    static constexpr IComposerClient::PowerMode ACTUAL_POWER_MODE_FOR_DOZE =
+            IComposerClient::PowerMode::DOZE;
+    static constexpr IComposerClient::PowerMode ACTUAL_POWER_MODE_FOR_DOZE_SUSPEND =
+            IComposerClient::PowerMode::DOZE_SUSPEND;
+};
+
+// Used when we simulate a display that does not support doze.
+struct DozeNotSupportedVariant {
+    static constexpr bool DOZE_SUPPORTED = false;
+    static constexpr IComposerClient::PowerMode ACTUAL_POWER_MODE_FOR_DOZE =
+            IComposerClient::PowerMode::ON;
+    static constexpr IComposerClient::PowerMode ACTUAL_POWER_MODE_FOR_DOZE_SUSPEND =
+            IComposerClient::PowerMode::ON;
+};
+
+struct EventThreadBaseSupportedVariant {
+    static void setupEventAndEventControlThreadNoCallExpectations(DisplayTransactionTest* test) {
+        // The event control thread should not be notified.
+        EXPECT_CALL(*test->mEventControlThread, setVsyncEnabled(_)).Times(0);
+
+        // The event thread should not be notified.
+        EXPECT_CALL(*test->mEventThread, onScreenReleased()).Times(0);
+        EXPECT_CALL(*test->mEventThread, onScreenAcquired()).Times(0);
+    }
+};
+
+struct EventThreadNotSupportedVariant : public EventThreadBaseSupportedVariant {
+    static void setupAcquireAndEnableVsyncCallExpectations(DisplayTransactionTest* test) {
+        // These calls are only expected for the primary display.
+
+        // Instead expect no calls.
+        setupEventAndEventControlThreadNoCallExpectations(test);
+    }
+
+    static void setupReleaseAndDisableVsyncCallExpectations(DisplayTransactionTest* test) {
+        // These calls are only expected for the primary display.
+
+        // Instead expect no calls.
+        setupEventAndEventControlThreadNoCallExpectations(test);
+    }
+};
+
+struct EventThreadIsSupportedVariant : public EventThreadBaseSupportedVariant {
+    static void setupAcquireAndEnableVsyncCallExpectations(DisplayTransactionTest* test) {
+        // The event control thread should be notified to enable vsyncs
+        EXPECT_CALL(*test->mEventControlThread, setVsyncEnabled(true)).Times(1);
+
+        // The event thread should be notified that the screen was acquired.
+        EXPECT_CALL(*test->mEventThread, onScreenAcquired()).Times(1);
+    }
+
+    static void setupReleaseAndDisableVsyncCallExpectations(DisplayTransactionTest* test) {
+        // There should be a call to setVsyncEnabled(false)
+        EXPECT_CALL(*test->mEventControlThread, setVsyncEnabled(false)).Times(1);
+
+        // The event thread should not be notified that the screen was released.
+        EXPECT_CALL(*test->mEventThread, onScreenReleased()).Times(1);
+    }
+};
+
+// --------------------------------------------------------------------
+// Note:
+//
+// There are a large number of transitions we could test, however we only test a
+// selected subset which provides complete test coverage of the implementation.
+// --------------------------------------------------------------------
+
+template <int initialPowerMode, int targetPowerMode>
+struct TransitionVariantCommon {
+    static constexpr auto INITIAL_POWER_MODE = initialPowerMode;
+    static constexpr auto TARGET_POWER_MODE = targetPowerMode;
+
+    static void verifyPostconditions(DisplayTransactionTest*) {}
+};
+
+struct TransitionOffToOnVariant
+      : public TransitionVariantCommon<HWC_POWER_MODE_OFF, HWC_POWER_MODE_NORMAL> {
+    template <typename Case>
+    static void setupCallExpectations(DisplayTransactionTest* test) {
+        Case::setupComposerCallExpectations(test, IComposerClient::PowerMode::ON);
+        Case::EventThread::setupAcquireAndEnableVsyncCallExpectations(test);
+        Case::setupRepaintEverythingCallExpectations(test);
+    }
+
+    static void verifyPostconditions(DisplayTransactionTest* test) {
+        EXPECT_TRUE(test->mFlinger.getVisibleRegionsDirty());
+        EXPECT_TRUE(test->mFlinger.getHasPoweredOff());
+    }
+};
+
+struct TransitionOffToDozeSuspendVariant
+      : public TransitionVariantCommon<HWC_POWER_MODE_OFF, HWC_POWER_MODE_DOZE_SUSPEND> {
+    template <typename Case>
+    static void setupCallExpectations(DisplayTransactionTest* test) {
+        Case::setupComposerCallExpectations(test, Case::Doze::ACTUAL_POWER_MODE_FOR_DOZE_SUSPEND);
+        Case::EventThread::setupEventAndEventControlThreadNoCallExpectations(test);
+        Case::setupRepaintEverythingCallExpectations(test);
+    }
+
+    static void verifyPostconditions(DisplayTransactionTest* test) {
+        EXPECT_TRUE(test->mFlinger.getVisibleRegionsDirty());
+        EXPECT_TRUE(test->mFlinger.getHasPoweredOff());
+    }
+};
+
+struct TransitionOnToOffVariant
+      : public TransitionVariantCommon<HWC_POWER_MODE_NORMAL, HWC_POWER_MODE_OFF> {
+    template <typename Case>
+    static void setupCallExpectations(DisplayTransactionTest* test) {
+        Case::EventThread::setupReleaseAndDisableVsyncCallExpectations(test);
+        Case::setupComposerCallExpectations(test, IComposerClient::PowerMode::OFF);
+    }
+
+    static void verifyPostconditions(DisplayTransactionTest* test) {
+        EXPECT_TRUE(test->mFlinger.getVisibleRegionsDirty());
+    }
+};
+
+struct TransitionDozeSuspendToOffVariant
+      : public TransitionVariantCommon<HWC_POWER_MODE_DOZE_SUSPEND, HWC_POWER_MODE_OFF> {
+    template <typename Case>
+    static void setupCallExpectations(DisplayTransactionTest* test) {
+        Case::EventThread::setupEventAndEventControlThreadNoCallExpectations(test);
+        Case::setupComposerCallExpectations(test, IComposerClient::PowerMode::OFF);
+    }
+
+    static void verifyPostconditions(DisplayTransactionTest* test) {
+        EXPECT_TRUE(test->mFlinger.getVisibleRegionsDirty());
+    }
+};
+
+struct TransitionOnToDozeVariant
+      : public TransitionVariantCommon<HWC_POWER_MODE_NORMAL, HWC_POWER_MODE_DOZE> {
+    template <typename Case>
+    static void setupCallExpectations(DisplayTransactionTest* test) {
+        Case::EventThread::setupEventAndEventControlThreadNoCallExpectations(test);
+        Case::setupComposerCallExpectations(test, Case::Doze::ACTUAL_POWER_MODE_FOR_DOZE);
+    }
+};
+
+struct TransitionDozeSuspendToDozeVariant
+      : public TransitionVariantCommon<HWC_POWER_MODE_DOZE_SUSPEND, HWC_POWER_MODE_DOZE> {
+    template <typename Case>
+    static void setupCallExpectations(DisplayTransactionTest* test) {
+        Case::EventThread::setupAcquireAndEnableVsyncCallExpectations(test);
+        Case::setupComposerCallExpectations(test, Case::Doze::ACTUAL_POWER_MODE_FOR_DOZE);
+    }
+};
+
+struct TransitionDozeToOnVariant
+      : public TransitionVariantCommon<HWC_POWER_MODE_DOZE, HWC_POWER_MODE_NORMAL> {
+    template <typename Case>
+    static void setupCallExpectations(DisplayTransactionTest* test) {
+        Case::EventThread::setupEventAndEventControlThreadNoCallExpectations(test);
+        Case::setupComposerCallExpectations(test, IComposerClient::PowerMode::ON);
+    }
+};
+
+struct TransitionDozeSuspendToOnVariant
+      : public TransitionVariantCommon<HWC_POWER_MODE_DOZE_SUSPEND, HWC_POWER_MODE_NORMAL> {
+    template <typename Case>
+    static void setupCallExpectations(DisplayTransactionTest* test) {
+        Case::EventThread::setupAcquireAndEnableVsyncCallExpectations(test);
+        Case::setupComposerCallExpectations(test, IComposerClient::PowerMode::ON);
+    }
+};
+
+struct TransitionOnToDozeSuspendVariant
+      : public TransitionVariantCommon<HWC_POWER_MODE_NORMAL, HWC_POWER_MODE_DOZE_SUSPEND> {
+    template <typename Case>
+    static void setupCallExpectations(DisplayTransactionTest* test) {
+        Case::EventThread::setupReleaseAndDisableVsyncCallExpectations(test);
+        Case::setupComposerCallExpectations(test, Case::Doze::ACTUAL_POWER_MODE_FOR_DOZE_SUSPEND);
+    }
+};
+
+struct TransitionOnToUnknownVariant
+      : public TransitionVariantCommon<HWC_POWER_MODE_NORMAL, HWC_POWER_MODE_LEET> {
+    template <typename Case>
+    static void setupCallExpectations(DisplayTransactionTest* test) {
+        Case::EventThread::setupEventAndEventControlThreadNoCallExpectations(test);
+        Case::setupNoComposerPowerModeCallExpectations(test);
+    }
+};
+
+// --------------------------------------------------------------------
+// Note:
+//
+// Rather than testing the cartesian product of of
+// DozeIsSupported/DozeNotSupported with all other options, we use one for one
+// display type, and the other for another display type.
+// --------------------------------------------------------------------
+
+template <typename DisplayVariant, typename DozeVariant, typename EventThreadVariant,
+          typename TransitionVariant>
+struct DisplayPowerCase {
+    using Display = DisplayVariant;
+    using Doze = DozeVariant;
+    using EventThread = EventThreadVariant;
+    using Transition = TransitionVariant;
+
+    static auto injectDisplayWithInitialPowerMode(DisplayTransactionTest* test, int mode) {
+        Display::injectHwcDisplay(test);
+        auto display = Display::makeFakeExistingDisplayInjector(test);
+        display.inject();
+        display.mutableDisplayDevice()->setPowerMode(mode);
+        return display;
+    }
+
+    static void setInitialPrimaryHWVsyncEnabled(DisplayTransactionTest* test, bool enabled) {
+        test->mFlinger.mutablePrimaryHWVsyncEnabled() = enabled;
+    }
+
+    static void setupRepaintEverythingCallExpectations(DisplayTransactionTest* test) {
+        EXPECT_CALL(*test->mMessageQueue, invalidate()).Times(1);
+    }
+
+    static void setupSurfaceInterceptorCallExpectations(DisplayTransactionTest* test, int mode) {
+        EXPECT_CALL(*test->mSurfaceInterceptor, isEnabled()).WillOnce(Return(true));
+        EXPECT_CALL(*test->mSurfaceInterceptor, savePowerModeUpdate(_, mode)).Times(1);
+    }
+
+    static void setupComposerCallExpectations(DisplayTransactionTest* test,
+                                              IComposerClient::PowerMode mode) {
+        // Any calls to get the active config will return a default value.
+        EXPECT_CALL(*test->mComposer, getActiveConfig(Display::HWC_DISPLAY_ID, _))
+                .WillRepeatedly(DoAll(SetArgPointee<1>(Display::HWC_ACTIVE_CONFIG_ID),
+                                      Return(Error::NONE)));
+
+        // Any calls to get whether the display supports dozing will return the value set by the
+        // policy variant.
+        EXPECT_CALL(*test->mComposer, getDozeSupport(Display::HWC_DISPLAY_ID, _))
+                .WillRepeatedly(DoAll(SetArgPointee<1>(Doze::DOZE_SUPPORTED), Return(Error::NONE)));
+
+        EXPECT_CALL(*test->mComposer, setPowerMode(Display::HWC_DISPLAY_ID, mode)).Times(1);
+    }
+
+    static void setupNoComposerPowerModeCallExpectations(DisplayTransactionTest* test) {
+        EXPECT_CALL(*test->mComposer, setPowerMode(Display::HWC_DISPLAY_ID, _)).Times(0);
+    }
+};
+
+// A sample configuration for the primary display.
+// In addition to having event thread support, we emulate doze support.
+template <typename TransitionVariant>
+using PrimaryDisplayPowerCase = DisplayPowerCase<PrimaryDisplayVariant, DozeIsSupportedVariant,
+                                                 EventThreadIsSupportedVariant, TransitionVariant>;
+
+// A sample configuration for the external display.
+// In addition to not having event thread support, we emulate not having doze
+// support.
+template <typename TransitionVariant>
+using ExternalDisplayPowerCase =
+        DisplayPowerCase<ExternalDisplayVariant, DozeNotSupportedVariant,
+                         EventThreadNotSupportedVariant, TransitionVariant>;
+
+class SetPowerModeInternalTest : public DisplayTransactionTest {
+public:
+    template <typename Case>
+    void transitionDisplayCommon();
+};
+
+template <int PowerMode>
+struct PowerModeInitialVSyncEnabled : public std::false_type {};
+
+template <>
+struct PowerModeInitialVSyncEnabled<HWC_POWER_MODE_NORMAL> : public std::true_type {};
+
+template <>
+struct PowerModeInitialVSyncEnabled<HWC_POWER_MODE_DOZE> : public std::true_type {};
+
+template <typename Case>
+void SetPowerModeInternalTest::transitionDisplayCommon() {
+    // --------------------------------------------------------------------
+    // Preconditions
+
+    auto display =
+            Case::injectDisplayWithInitialPowerMode(this, Case::Transition::INITIAL_POWER_MODE);
+    Case::setInitialPrimaryHWVsyncEnabled(this,
+                                          PowerModeInitialVSyncEnabled<
+                                                  Case::Transition::INITIAL_POWER_MODE>::value);
+
+    // --------------------------------------------------------------------
+    // Call Expectations
+
+    Case::setupSurfaceInterceptorCallExpectations(this, Case::Transition::TARGET_POWER_MODE);
+    Case::Transition::template setupCallExpectations<Case>(this);
+
+    // --------------------------------------------------------------------
+    // Invocation
+
+    mFlinger.setPowerModeInternal(display.mutableDisplayDevice(),
+                                  Case::Transition::TARGET_POWER_MODE);
+
+    // --------------------------------------------------------------------
+    // Postconditions
+
+    Case::Transition::verifyPostconditions(this);
+}
+
+TEST_F(SetPowerModeInternalTest, setPowerModeInternalDoesNothingIfNoChange) {
+    using Case = SimplePrimaryDisplayCase;
+
+    // --------------------------------------------------------------------
+    // Preconditions
+
+    // A primary display device is set up
+    Case::Display::injectHwcDisplay(this);
+    auto display = Case::Display::makeFakeExistingDisplayInjector(this);
+    display.inject();
+
+    // The diplay is already set to HWC_POWER_MODE_NORMAL
+    display.mutableDisplayDevice()->setPowerMode(HWC_POWER_MODE_NORMAL);
+
+    // --------------------------------------------------------------------
+    // Invocation
+
+    mFlinger.setPowerModeInternal(display.mutableDisplayDevice(), HWC_POWER_MODE_NORMAL);
+
+    // --------------------------------------------------------------------
+    // Postconditions
+
+    EXPECT_EQ(HWC_POWER_MODE_NORMAL, display.mutableDisplayDevice()->getPowerMode());
+}
+
+TEST_F(SetPowerModeInternalTest, setPowerModeInternalJustSetsInternalStateIfVirtualDisplay) {
+    using Case = HwcVirtualDisplayCase;
+
+    // --------------------------------------------------------------------
+    // Preconditions
+
+    // We need to resize this so that the HWC thinks the virtual display
+    // is something it created.
+    mFlinger.mutableHwcDisplayData().resize(3);
+
+    // A virtual display device is set up
+    Case::Display::injectHwcDisplay(this);
+    auto display = Case::Display::makeFakeExistingDisplayInjector(this);
+    display.inject();
+
+    // The display is set to HWC_POWER_MODE_OFF
+    getDisplayDevice(display.token())->setPowerMode(HWC_POWER_MODE_OFF);
+
+    // --------------------------------------------------------------------
+    // Invocation
+
+    mFlinger.setPowerModeInternal(display.mutableDisplayDevice(), HWC_POWER_MODE_NORMAL);
+
+    // --------------------------------------------------------------------
+    // Postconditions
+
+    EXPECT_EQ(HWC_POWER_MODE_NORMAL, display.mutableDisplayDevice()->getPowerMode());
+}
+
+TEST_F(SetPowerModeInternalTest, transitionsDisplayFromOffToOnPrimaryDisplay) {
+    transitionDisplayCommon<PrimaryDisplayPowerCase<TransitionOffToOnVariant>>();
+}
+
+TEST_F(SetPowerModeInternalTest, transitionsDisplayFromOffToDozeSuspendPrimaryDisplay) {
+    transitionDisplayCommon<PrimaryDisplayPowerCase<TransitionOffToDozeSuspendVariant>>();
+}
+
+TEST_F(SetPowerModeInternalTest, transitionsDisplayFromOnToOffPrimaryDisplay) {
+    transitionDisplayCommon<PrimaryDisplayPowerCase<TransitionOnToOffVariant>>();
+}
+
+TEST_F(SetPowerModeInternalTest, transitionsDisplayFromDozeSuspendToOffPrimaryDisplay) {
+    transitionDisplayCommon<PrimaryDisplayPowerCase<TransitionDozeSuspendToOffVariant>>();
+}
+
+TEST_F(SetPowerModeInternalTest, transitionsDisplayFromOnToDozePrimaryDisplay) {
+    transitionDisplayCommon<PrimaryDisplayPowerCase<TransitionOnToDozeVariant>>();
+}
+
+TEST_F(SetPowerModeInternalTest, transitionsDisplayFromDozeSuspendToDozePrimaryDisplay) {
+    transitionDisplayCommon<PrimaryDisplayPowerCase<TransitionDozeSuspendToDozeVariant>>();
+}
+
+TEST_F(SetPowerModeInternalTest, transitionsDisplayFromDozeToOnPrimaryDisplay) {
+    transitionDisplayCommon<PrimaryDisplayPowerCase<TransitionDozeToOnVariant>>();
+}
+
+TEST_F(SetPowerModeInternalTest, transitionsDisplayFromDozeSuspendToOnPrimaryDisplay) {
+    transitionDisplayCommon<PrimaryDisplayPowerCase<TransitionDozeSuspendToOnVariant>>();
+}
+
+TEST_F(SetPowerModeInternalTest, transitionsDisplayFromOnToDozeSuspendPrimaryDisplay) {
+    transitionDisplayCommon<PrimaryDisplayPowerCase<TransitionOnToDozeSuspendVariant>>();
+}
+
+TEST_F(SetPowerModeInternalTest, transitionsDisplayFromOnToUnknownPrimaryDisplay) {
+    transitionDisplayCommon<PrimaryDisplayPowerCase<TransitionOnToUnknownVariant>>();
+}
+
+TEST_F(SetPowerModeInternalTest, transitionsDisplayFromOffToOnExternalDisplay) {
+    transitionDisplayCommon<ExternalDisplayPowerCase<TransitionOffToOnVariant>>();
+}
+
+TEST_F(SetPowerModeInternalTest, transitionsDisplayFromOffToDozeSuspendExternalDisplay) {
+    transitionDisplayCommon<ExternalDisplayPowerCase<TransitionOffToDozeSuspendVariant>>();
+}
+
+TEST_F(SetPowerModeInternalTest, transitionsDisplayFromOnToOffExternalDisplay) {
+    transitionDisplayCommon<ExternalDisplayPowerCase<TransitionOnToOffVariant>>();
+}
+
+TEST_F(SetPowerModeInternalTest, transitionsDisplayFromDozeSuspendToOffExternalDisplay) {
+    transitionDisplayCommon<ExternalDisplayPowerCase<TransitionDozeSuspendToOffVariant>>();
+}
+
+TEST_F(SetPowerModeInternalTest, transitionsDisplayFromOnToDozeExternalDisplay) {
+    transitionDisplayCommon<ExternalDisplayPowerCase<TransitionOnToDozeVariant>>();
+}
+
+TEST_F(SetPowerModeInternalTest, transitionsDisplayFromDozeSuspendToDozeExternalDisplay) {
+    transitionDisplayCommon<ExternalDisplayPowerCase<TransitionDozeSuspendToDozeVariant>>();
+}
+
+TEST_F(SetPowerModeInternalTest, transitionsDisplayFromDozeToOnExternalDisplay) {
+    transitionDisplayCommon<ExternalDisplayPowerCase<TransitionDozeToOnVariant>>();
+}
+
+TEST_F(SetPowerModeInternalTest, transitionsDisplayFromDozeSuspendToOnExternalDisplay) {
+    transitionDisplayCommon<ExternalDisplayPowerCase<TransitionDozeSuspendToOnVariant>>();
+}
+
+TEST_F(SetPowerModeInternalTest, transitionsDisplayFromOnToDozeSuspendExternalDisplay) {
+    transitionDisplayCommon<ExternalDisplayPowerCase<TransitionOnToDozeSuspendVariant>>();
+}
+
+TEST_F(SetPowerModeInternalTest, transitionsDisplayFromOnToUnknownExternalDisplay) {
+    transitionDisplayCommon<ExternalDisplayPowerCase<TransitionOnToUnknownVariant>>();
 }
 
 } // namespace

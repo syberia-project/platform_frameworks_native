@@ -22,6 +22,7 @@ cc_defaults {
         "android.frameworks.vr.composer@1.0",
         "android.hardware.configstore-utils",
         "android.hardware.configstore@1.0",
+        "android.hardware.configstore@1.1",
         "android.hardware.graphics.allocator@2.0",
         "android.hardware.graphics.composer@2.1",
         "android.hardware.graphics.composer@2.2",
@@ -46,6 +47,7 @@ cc_defaults {
         "libpdx_default_transport",
         "libprotobuf-cpp-lite",
         "libsync",
+        "libtimestats_proto",
         "libui",
         "libutils",
         "libvulkan",
@@ -125,6 +127,7 @@ filegroup {
         "SurfaceFlinger.cpp",
         "SurfaceInterceptor.cpp",
         "SurfaceTracing.cpp",
+        "TimeStats/TimeStats.cpp",
         "Transform.cpp",
         "DisplayUtils.cpp",
         "ExSurfaceFlinger/ExSurfaceFlinger.cpp",
@@ -184,6 +187,7 @@ cc_binary {
         "liblayers_proto",
         "liblog",
         "libsurfaceflinger",
+        "libtimestats_proto",
         "libutils",
     ],
     static_libs: [
@@ -225,5 +229,6 @@ cc_library_shared {
 
 subdirs = [
     "layerproto",
+    "TimeStats/timestatsproto",
     "tests",
 ]

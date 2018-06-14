@@ -51,10 +51,40 @@ void Description::setProjectionMatrix(const mat4& mtx) {
     mProjectionMatrix = mtx;
 }
 
+void Description::setSaturationMatrix(const mat4& mtx) {
+    mSaturationMatrix = mtx;
+}
+
 void Description::setColorMatrix(const mat4& mtx) {
-    const mat4 identity;
     mColorMatrix = mtx;
-    mColorMatrixEnabled = (mtx != identity);
+}
+
+void Description::setInputTransformMatrix(const mat3& matrix) {
+    mInputTransformMatrix = matrix;
+}
+
+void Description::setOutputTransformMatrix(const mat4& matrix) {
+    mOutputTransformMatrix = matrix;
+}
+
+bool Description::hasInputTransformMatrix() const {
+    const mat3 identity;
+    return mInputTransformMatrix != identity;
+}
+
+bool Description::hasOutputTransformMatrix() const {
+    const mat4 identity;
+    return mOutputTransformMatrix != identity;
+}
+
+bool Description::hasColorMatrix() const {
+    const mat4 identity;
+    return mColorMatrix != identity;
+}
+
+bool Description::hasSaturationMatrix() const {
+    const mat4 identity;
+    return mSaturationMatrix != identity;
 }
 
 const mat4& Description::getColorMatrix() const {
@@ -71,6 +101,10 @@ void Description::setInputTransferFunction(TransferFunction transferFunction) {
 
 void Description::setOutputTransferFunction(TransferFunction transferFunction) {
     mOutputTransferFunction = transferFunction;
+}
+
+void Description::setDisplayMaxLuminance(const float maxLuminance) {
+    mDisplayMaxLuminance = maxLuminance;
 }
 
 } /* namespace android */

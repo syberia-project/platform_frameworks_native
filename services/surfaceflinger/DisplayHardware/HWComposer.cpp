@@ -318,6 +318,28 @@ std::shared_ptr<const HWC2::Display::Config>
     return config;
 }
 
+int HWComposer::getActiveConfigIndex(int32_t displayId) const {
+    if (!isValidDisplay(displayId)) {
+        ALOGV("getActiveConfigIndex: Attempted to access invalid display %d", displayId);
+        return -1;
+    }
+    int index;
+    auto error = mDisplayData[displayId].hwcDisplay->getActiveConfigIndex(&index);
+    if (error == HWC2::Error::BadConfig) {
+        ALOGE("getActiveConfigIndex: No config active, returning -1");
+        return -1;
+    } else if (error != HWC2::Error::None) {
+        ALOGE("getActiveConfigIndex failed for display %d: %s (%d)", displayId,
+              to_string(error).c_str(), static_cast<int32_t>(error));
+        return -1;
+    } else if (index < 0) {
+        ALOGE("getActiveConfigIndex returned an unknown config for display %d", displayId);
+        return -1;
+    }
+
+    return index;
+}
+
 std::vector<ui::ColorMode> HWComposer::getColorModes(int32_t displayId) const {
     RETURN_IF_INVALID_DISPLAY(displayId, {});
 
@@ -596,7 +618,10 @@ status_t HWComposer::setPowerMode(int32_t displayId, int32_t intMode) {
             ALOGV("setPowerMode: Calling HWC %s", to_string(mode).c_str());
             {
                 auto error = hwcDisplay->setPowerMode(mode);
-                LOG_HWC_ERROR(("setPowerMode(" + to_string(mode) + ")").c_str(), error, displayId);
+                if (error != HWC2::Error::None) {
+                    LOG_HWC_ERROR(("setPowerMode(" + to_string(mode) + ")").c_str(),
+                                  error, displayId);
+                }
             }
             break;
         case HWC2::PowerMode::Doze:
@@ -605,14 +630,19 @@ status_t HWComposer::setPowerMode(int32_t displayId, int32_t intMode) {
             {
                 bool supportsDoze = false;
                 auto error = hwcDisplay->supportsDoze(&supportsDoze);
-                LOG_HWC_ERROR("supportsDoze", error, displayId);
+                if (error != HWC2::Error::None) {
+                    LOG_HWC_ERROR("supportsDoze", error, displayId);
+                }
 
                 if (!supportsDoze) {
                     mode = HWC2::PowerMode::On;
                 }
 
                 error = hwcDisplay->setPowerMode(mode);
-                LOG_HWC_ERROR(("setPowerMode(" + to_string(mode) + ")").c_str(), error, displayId);
+                if (error != HWC2::Error::None) {
+                    LOG_HWC_ERROR(("setPowerMode(" + to_string(mode) + ")").c_str(),
+                                  error, displayId);
+                }
             }
             break;
         default:
