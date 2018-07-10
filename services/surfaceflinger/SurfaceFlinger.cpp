@@ -1552,7 +1552,7 @@ void SurfaceFlinger::handleMessageRefresh() {
         mHadClientComposition = mHadClientComposition ||
                 getBE().mHwc->hasClientComposition(displayDevice->getHwcDisplayId());
     }
-    mVsyncModulator.setLastFrameUsedRenderEngine(mHadClientComposition);
+    mVsyncModulator.onRefreshed(mHadClientComposition);
 
     mLayersWithQueuedFrames.clear();
 }
@@ -1937,9 +1937,9 @@ void SurfaceFlinger::pickColorMode(const sp<DisplayDevice>& displayDevice,
     Dataspace hdrDataSpace;
     Dataspace bestDataSpace = getBestDataspace(displayDevice, &hdrDataSpace);
 
-    // respect hdrDataSpace only when there is modern HDR support
+    // respect hdrDataSpace only when there is no legacy HDR support
     const bool isHdr = hdrDataSpace != Dataspace::UNKNOWN &&
-        displayDevice->hasModernHdrSupport(hdrDataSpace);
+        !displayDevice->hasLegacyHdrSupport(hdrDataSpace);
     if (isHdr) {
         bestDataSpace = hdrDataSpace;
     }
@@ -2037,13 +2037,14 @@ void SurfaceFlinger::setUpHWComposer() {
                     "display %zd: %d", displayId, result);
         }
         for (auto& layer : displayDevice->getVisibleLayersSortedByZ()) {
-            if ((layer->getDataSpace() == Dataspace::BT2020_PQ ||
-                 layer->getDataSpace() == Dataspace::BT2020_ITU_PQ) &&
+            if (layer->isHdrY410()) {
+                layer->forceClientComposition(hwcId);
+            } else if ((layer->getDataSpace() == Dataspace::BT2020_PQ ||
+                        layer->getDataSpace() == Dataspace::BT2020_ITU_PQ) &&
                     !displayDevice->hasHDR10Support()) {
                 layer->forceClientComposition(hwcId);
-            }
-            if ((layer->getDataSpace() == Dataspace::BT2020_HLG ||
-                 layer->getDataSpace() == Dataspace::BT2020_ITU_HLG) &&
+            } else if ((layer->getDataSpace() == Dataspace::BT2020_HLG ||
+                        layer->getDataSpace() == Dataspace::BT2020_ITU_HLG) &&
                     !displayDevice->hasHLGSupport()) {
                 layer->forceClientComposition(hwcId);
             }
@@ -2352,17 +2353,6 @@ sp<DisplayDevice> SurfaceFlinger::setupNewDisplayDeviceInternal(
     hw->setLayerStack(state.layerStack);
     hw->setProjection(state.orientation, state.viewport, state.frame);
     hw->setDisplayName(state.displayName);
-
-    // When a new display device is added, update the active
-    // config by querying HWC otherwise the default config
-    // (config 0) will be used.
-    if (hwcId >= DisplayDevice::DISPLAY_PRIMARY &&
-        hwcId < DisplayDevice::NUM_BUILTIN_DISPLAY_TYPES) {
-        int activeConfig = getBE().mHwc->getActiveConfig(hwcId)->getId();
-        if (activeConfig >= 0) {
-            hw->setActiveConfig(activeConfig);
-        }
-    }
 
     return hw;
 }
@@ -3126,7 +3116,7 @@ status_t SurfaceFlinger::addClientLayer(const sp<Client>& client,
 
         if (gbc != nullptr) {
             mGraphicBufferProducerList.insert(IInterface::asBinder(gbc).get());
-            LOG_ALWAYS_FATAL_IF(mGraphicBufferProducerList.size() >
+            ALOGE_IF(mGraphicBufferProducerList.size() >
                                         mMaxGraphicBufferProducerListSize,
                                 "Suspected IGBP leak: %zu IGBPs (%zu max), %zu Layers",
                                 mGraphicBufferProducerList.size(),
@@ -3395,6 +3385,13 @@ uint32_t SurfaceFlinger::setClientStateLocked(const ComposerState& composerState
     const uint32_t what = s.what;
     bool geometryAppliesWithResize =
             what & layer_state_t::eGeometryAppliesWithResize;
+
+    // If we are deferring transaction, make sure to push the pending state, as otherwise the
+    // pending state will also be deferred.
+    if (what & layer_state_t::eDeferTransaction) {
+        layer->pushPendingState();
+    }
+
     if (what & layer_state_t::ePositionChanged) {
         if (layer->setPosition(s.x, s.y, !geometryAppliesWithResize)) {
             flags |= eTraversalNeeded;
