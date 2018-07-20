@@ -85,7 +85,7 @@ PipeRelay::~PipeRelay() {
         shutdown(mFds[0], SHUT_RD);
     }
 
-    if (mThread != NULL) {
+    if (mThread != nullptr) {
         mThread->join();
         mThread.clear();
     }
