@@ -74,7 +74,7 @@ public:
     /* this is only needed as a workaround, use only if you know
      * what you are doing */
     status_t setDevice(const char* device) {
-        if (mDevice == 0)
+        if (mDevice == nullptr)
             mDevice = device;
         return mDevice ? NO_ERROR : ALREADY_EXISTS;
     }
