@@ -306,7 +306,7 @@ status_t Value::writeToParcel(Parcel* parcel) const
 
 #define BEGIN_HANDLE_WRITE()                                                                      \
     do {                                                                                          \
-        const void* t_info(mContent?mContent->type_ptr():nullptr);                                   \
+        const void* t_info(mContent?mContent->type_ptr():nullptr);                                \
         if (false) { }
 #define HANDLE_WRITE_TYPE(T, TYPEVAL, TYPEMETHOD)                                                 \
     else if (t_info == internal_type_ptr<T>()) {                                                  \
