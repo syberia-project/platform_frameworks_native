@@ -288,6 +288,8 @@ public:
     static bool hasWideColorDisplay;
     friend class ExSurfaceFlinger;
 
+    static int primaryDisplayOrientation;
+
     static char const* getServiceName() ANDROID_API {
         return "SurfaceFlinger";
     }
@@ -350,8 +352,6 @@ public:
 
     bool authenticateSurfaceTextureLocked(
         const sp<IGraphicBufferProducer>& bufferProducer) const;
-
-    int getPrimaryDisplayOrientation() const { return mPrimaryDisplayOrientation; }
 
 private:
     friend class Client;
@@ -886,7 +886,6 @@ private:
     mutable std::unique_ptr<MessageQueue> mEventQueue{std::make_unique<impl::MessageQueue>()};
     FrameTracker mAnimFrameTracker;
     DispSync mPrimaryDispSync;
-    int mPrimaryDisplayOrientation = DisplayState::eOrientationDefault;
 
     // protected by mDestroyedLayerLock;
     mutable Mutex mDestroyedLayerLock;
