@@ -81,6 +81,15 @@ cc_defaults {
 
     // we need to access the private Bionic header <bionic_tls.h>
     include_dirs: ["bionic/libc/private"],
+
+    // AOSP Clang seems to set -arm-implicit-it=always by default.
+    // Add it here to fix SDClang
+    arch: {
+        arm: {
+            cflags: ["-mllvm", "-arm-implicit-it=always", "-Wno-inline-asm"]
+        },
+    },
+
 }
 
 //##############################################################################
