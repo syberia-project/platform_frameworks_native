@@ -25,14 +25,12 @@ namespace android {
 
 class ContainerLayer : public Layer {
 public:
-    ContainerLayer(SurfaceFlinger* flinger, const sp<Client>& client, const String8& name,
-                   uint32_t w, uint32_t h, uint32_t flags);
-    virtual ~ContainerLayer() = default;
+    explicit ContainerLayer(const LayerCreationArgs&);
+    ~ContainerLayer() override;
 
     const char* getTypeId() const override { return "ContainerLayer"; }
     void onDraw(const RenderArea& renderArea, const Region& clip,
                 bool useIdentityTransform) override;
-    void drawNow(const RenderArea& renderArea, bool useIdentityTransform) override;
     bool isVisible() const override;
 
     void setPerFrameData(const sp<const DisplayDevice>& display) override;

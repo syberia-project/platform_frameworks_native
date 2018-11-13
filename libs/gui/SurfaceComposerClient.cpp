@@ -240,9 +240,6 @@ SurfaceComposerClient::Transaction& SurfaceComposerClient::Transaction::setSize(
     s->w = w;
     s->h = h;
 
-    // Resizing a surface makes the transaction synchronous.
-    mForceSynchronous = true;
-
     return *this;
 }
 
@@ -353,18 +350,6 @@ SurfaceComposerClient::Transaction& SurfaceComposerClient::Transaction::setCrop_
     }
     s->what |= layer_state_t::eCropChanged_legacy;
     s->crop_legacy = crop;
-    return *this;
-}
-
-SurfaceComposerClient::Transaction& SurfaceComposerClient::Transaction::setFinalCrop_legacy(
-        const sp<SurfaceControl>& sc, const Rect& crop) {
-    layer_state_t* s = getLayerState(sc);
-    if (!s) {
-        mStatus = BAD_INDEX;
-        return *this;
-    }
-    s->what |= layer_state_t::eFinalCropChanged_legacy;
-    s->finalCrop_legacy = crop;
     return *this;
 }
 
@@ -617,6 +602,18 @@ SurfaceComposerClient::Transaction& SurfaceComposerClient::Transaction::destroyS
     return *this;
 }
 
+SurfaceComposerClient::Transaction& SurfaceComposerClient::Transaction::setColorTransform(
+    const sp<SurfaceControl>& sc, const mat3& matrix, const vec3& translation) {
+    layer_state_t* s = getLayerState(sc);
+    if (!s) {
+        mStatus = BAD_INDEX;
+        return *this;
+    }
+    s->what |= layer_state_t::eColorTransformChanged;
+    s->colorTransform = mat4(matrix, translation);
+    return *this;
+}
+
 // ---------------------------------------------------------------------------
 
 DisplayState& SurfaceComposerClient::Transaction::getDisplayState(const sp<IBinder>& token) {
@@ -842,10 +839,6 @@ status_t SurfaceComposerClient::getDisplayInfo(const sp<IBinder>& display,
     return NO_ERROR;
 }
 
-status_t SurfaceComposerClient::getDisplayViewport(const sp<IBinder>& display, Rect* outViewport) {
-    return ComposerService::getComposerService()->getDisplayViewport(display, outViewport);
-}
-
 int SurfaceComposerClient::getActiveConfig(const sp<IBinder>& display) {
     return ComposerService::getComposerService()->getActiveConfig(display);
 }
@@ -873,6 +866,11 @@ void SurfaceComposerClient::setDisplayPowerMode(const sp<IBinder>& token,
     ComposerService::getComposerService()->setPowerMode(token, mode);
 }
 
+status_t SurfaceComposerClient::getCompositionPreference(ui::Dataspace* dataSpace,
+                                                         ui::PixelFormat* pixelFormat) {
+    return ComposerService::getComposerService()->getCompositionPreference(dataSpace, pixelFormat);
+}
+
 status_t SurfaceComposerClient::clearAnimationFrameStats() {
     return ComposerService::getComposerService()->clearAnimationFrameStats();
 }
@@ -890,13 +888,12 @@ status_t SurfaceComposerClient::getHdrCapabilities(const sp<IBinder>& display,
 // ----------------------------------------------------------------------------
 
 status_t ScreenshotClient::capture(const sp<IBinder>& display, Rect sourceCrop, uint32_t reqWidth,
-                                   uint32_t reqHeight, int32_t minLayerZ, int32_t maxLayerZ,
-                                   bool useIdentityTransform, uint32_t rotation,
+                                   uint32_t reqHeight, bool useIdentityTransform, uint32_t rotation,
                                    sp<GraphicBuffer>* outBuffer) {
     sp<ISurfaceComposer> s(ComposerService::getComposerService());
     if (s == nullptr) return NO_INIT;
-    status_t ret = s->captureScreen(display, outBuffer, sourceCrop, reqWidth, reqHeight, minLayerZ,
-                                    maxLayerZ, useIdentityTransform,
+    status_t ret = s->captureScreen(display, outBuffer, sourceCrop, reqWidth, reqHeight,
+                                    useIdentityTransform,
                                     static_cast<ISurfaceComposer::Rotation>(rotation));
     if (ret != NO_ERROR) {
         return ret;

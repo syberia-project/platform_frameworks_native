@@ -79,9 +79,6 @@ public:
     static status_t getDisplayInfo(const sp<IBinder>& display,
             DisplayInfo* info);
 
-    // Get the display viewport for the given display
-    static status_t getDisplayViewport(const sp<IBinder>& display, Rect* outViewport);
-
     // Get the index of the current active configuration (relative to the list
     // returned by getDisplayInfo)
     static int getActiveConfig(const sp<IBinder>& display);
@@ -103,6 +100,10 @@ public:
 
     /* Triggers screen on/off or low power mode and waits for it to complete */
     static void setDisplayPowerMode(const sp<IBinder>& display, int mode);
+
+    //
+    static status_t getCompositionPreference(ui::Dataspace* dataSpace,
+                                             ui::PixelFormat* pixelFormat);
 
     // ------------------------------------------------------------------------
     // surface creation / destruction
@@ -204,7 +205,6 @@ public:
         Transaction& setMatrix(const sp<SurfaceControl>& sc,
                 float dsdx, float dtdx, float dtdy, float dsdy);
         Transaction& setCrop_legacy(const sp<SurfaceControl>& sc, const Rect& crop);
-        Transaction& setFinalCrop_legacy(const sp<SurfaceControl>& sc, const Rect& crop);
         Transaction& setLayerStack(const sp<SurfaceControl>& sc, uint32_t layerStack);
         // Defers applying any changes made in this transaction until the Layer
         // identified by handle reaches the given frameNumber. If the Layer identified
@@ -269,6 +269,10 @@ public:
 
         Transaction& destroySurface(const sp<SurfaceControl>& sc);
 
+        // Set a color transform matrix on the given layer on the built-in display.
+        Transaction& setColorTransform(const sp<SurfaceControl>& sc, const mat3& matrix,
+                                       const vec3& translation);
+
         status_t setDisplaySurface(const sp<IBinder>& token,
                 const sp<IGraphicBufferProducer>& bufferProducer);
 
@@ -326,8 +330,7 @@ public:
     // if cropping isn't required, callers may pass in a default Rect, e.g.:
     //   capture(display, producer, Rect(), reqWidth, ...);
     static status_t capture(const sp<IBinder>& display, Rect sourceCrop, uint32_t reqWidth,
-                            uint32_t reqHeight, int32_t minLayerZ, int32_t maxLayerZ,
-                            bool useIdentityTransform, uint32_t rotation,
+                            uint32_t reqHeight, bool useIdentityTransform, uint32_t rotation,
                             sp<GraphicBuffer>* outBuffer);
     static status_t captureLayers(const sp<IBinder>& layerHandle, Rect sourceCrop, float frameScale,
                                   sp<GraphicBuffer>* outBuffer);

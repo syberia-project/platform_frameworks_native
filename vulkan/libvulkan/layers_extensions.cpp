@@ -78,7 +78,7 @@ class LayerLibrary {
           native_bridge_(false),
           refcount_(0) {}
 
-    LayerLibrary(LayerLibrary&& other)
+    LayerLibrary(LayerLibrary&& other) noexcept
         : path_(std::move(other.path_)),
           filename_(std::move(other.filename_)),
           dlhandle_(other.dlhandle_),
@@ -165,8 +165,13 @@ void LayerLibrary::Close() {
     std::lock_guard<std::mutex> lock(mutex_);
     if (--refcount_ == 0) {
         ALOGV("closing layer library '%s'", path_.c_str());
-        dlclose(dlhandle_);
-        dlhandle_ = nullptr;
+        std::string error_msg;
+        if (!android::CloseNativeLibrary(dlhandle_, native_bridge_, &error_msg)) {
+            ALOGE("failed to unload library '%s': %s", path_.c_str(), error_msg.c_str());
+            refcount_++;
+        } else {
+           dlhandle_ = nullptr;
+        }
     }
 }
 
@@ -540,7 +545,7 @@ LayerRef::~LayerRef() {
     }
 }
 
-LayerRef::LayerRef(LayerRef&& other) : layer_(other.layer_) {
+LayerRef::LayerRef(LayerRef&& other) noexcept : layer_(other.layer_) {
     other.layer_ = nullptr;
 }
 

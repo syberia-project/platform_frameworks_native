@@ -22,7 +22,9 @@
 #include <condition_variable>
 #include <cstdint>
 #include <mutex>
+#include <queue>
 #include <thread>
+#include <vector>
 
 #include <android-base/thread_annotations.h>
 
@@ -31,7 +33,6 @@
 #include <private/gui/BitTube.h>
 
 #include <utils/Errors.h>
-#include <utils/SortedVector.h>
 
 // ---------------------------------------------------------------------------
 namespace android {
@@ -108,12 +109,15 @@ public:
     using ResyncWithRateLimitCallback = std::function<void()>;
     using InterceptVSyncsCallback = std::function<void(nsecs_t)>;
 
+    // TODO(b/113612090): Once the Scheduler is complete this constructor will become obsolete.
     EventThread(VSyncSource* src, ResyncWithRateLimitCallback resyncWithRateLimitCallback,
+                InterceptVSyncsCallback interceptVSyncsCallback, const char* threadName);
+    EventThread(std::unique_ptr<VSyncSource> src,
+                ResyncWithRateLimitCallback resyncWithRateLimitCallback,
                 InterceptVSyncsCallback interceptVSyncsCallback, const char* threadName);
     ~EventThread();
 
     sp<BnDisplayEventConnection> createEventConnection() const override;
-    status_t registerDisplayEventConnection(const sp<Connection>& connection);
 
     void setVsyncRate(uint32_t count, const sp<Connection>& connection);
     void requestNextVsync(const sp<Connection>& connection);
@@ -134,9 +138,16 @@ public:
 private:
     friend EventThreadTest;
 
+    // TODO(b/113612090): Once the Scheduler is complete this constructor will become obsolete.
+    EventThread(VSyncSource* src, std::unique_ptr<VSyncSource> uniqueSrc,
+                ResyncWithRateLimitCallback resyncWithRateLimitCallback,
+                InterceptVSyncsCallback interceptVSyncsCallback, const char* threadName);
+
+    status_t registerDisplayEventConnection(const sp<Connection>& connection);
+
     void threadMain();
-    Vector<sp<EventThread::Connection>> waitForEventLocked(std::unique_lock<std::mutex>* lock,
-                                                           DisplayEventReceiver::Event* event)
+    std::vector<sp<EventThread::Connection>> waitForEventLocked(std::unique_lock<std::mutex>* lock,
+                                                                DisplayEventReceiver::Event* event)
             REQUIRES(mMutex);
 
     void removeDisplayEventConnectionLocked(const wp<Connection>& connection) REQUIRES(mMutex);
@@ -146,8 +157,10 @@ private:
     // Implements VSyncSource::Callback
     void onVSyncEvent(nsecs_t timestamp) override;
 
+    // TODO(b/113612090): Once the Scheduler is complete this pointer will become obsolete.
+    VSyncSource* mVSyncSource GUARDED_BY(mMutex) = nullptr;
+    std::unique_ptr<VSyncSource> mVSyncSourceUnique GUARDED_BY(mMutex) = nullptr;
     // constants
-    VSyncSource* const mVSyncSource GUARDED_BY(mMutex) = nullptr;
     const ResyncWithRateLimitCallback mResyncWithRateLimitCallback;
     const InterceptVSyncsCallback mInterceptVSyncsCallback;
 
@@ -156,8 +169,8 @@ private:
     mutable std::condition_variable mCondition;
 
     // protected by mLock
-    SortedVector<wp<Connection>> mDisplayEventConnections GUARDED_BY(mMutex);
-    Vector<DisplayEventReceiver::Event> mPendingEvents GUARDED_BY(mMutex);
+    std::vector<wp<Connection>> mDisplayEventConnections GUARDED_BY(mMutex);
+    std::queue<DisplayEventReceiver::Event> mPendingEvents GUARDED_BY(mMutex);
     std::array<DisplayEventReceiver::Event, 2> mVSyncEvent GUARDED_BY(mMutex);
     bool mUseSoftwareVSync GUARDED_BY(mMutex) = false;
     bool mVsyncEnabled GUARDED_BY(mMutex) = false;

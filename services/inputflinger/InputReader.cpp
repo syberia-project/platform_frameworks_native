@@ -257,64 +257,32 @@ static void synthesizeButtonKeys(InputReaderContext* context, int32_t action,
 // --- InputReaderConfiguration ---
 
 bool InputReaderConfiguration::getDisplayViewport(ViewportType viewportType,
-        const String8* uniqueDisplayId, DisplayViewport* outViewport) const {
-    const DisplayViewport* viewport = nullptr;
-    if (viewportType == ViewportType::VIEWPORT_VIRTUAL && uniqueDisplayId != nullptr) {
-        for (const DisplayViewport& currentViewport : mVirtualDisplays) {
-            if (currentViewport.uniqueId == *uniqueDisplayId) {
-                viewport = &currentViewport;
-                break;
+        const std::string& uniqueDisplayId, DisplayViewport* outViewport) const {
+    for (const DisplayViewport& currentViewport : mDisplays) {
+        if (currentViewport.type == viewportType) {
+            if (uniqueDisplayId.empty() ||
+                    (!uniqueDisplayId.empty() && uniqueDisplayId == currentViewport.uniqueId)) {
+                *outViewport = currentViewport;
+                return true;
             }
         }
-    } else if (viewportType == ViewportType::VIEWPORT_EXTERNAL) {
-        viewport = &mExternalDisplay;
-    } else if (viewportType == ViewportType::VIEWPORT_INTERNAL) {
-        viewport = &mInternalDisplay;
-    }
-
-    if (viewport != nullptr && viewport->displayId >= 0) {
-        *outViewport = *viewport;
-        return true;
     }
     return false;
 }
 
-void InputReaderConfiguration::setPhysicalDisplayViewport(ViewportType viewportType,
-        const DisplayViewport& viewport) {
-    if (viewportType == ViewportType::VIEWPORT_EXTERNAL) {
-        mExternalDisplay = viewport;
-    } else if (viewportType == ViewportType::VIEWPORT_INTERNAL) {
-        mInternalDisplay = viewport;
-    }
-}
-
-void InputReaderConfiguration::setVirtualDisplayViewports(
-        const Vector<DisplayViewport>& viewports) {
-    mVirtualDisplays = viewports;
+void InputReaderConfiguration::setDisplayViewports(const std::vector<DisplayViewport>& viewports) {
+    mDisplays = viewports;
 }
 
 void InputReaderConfiguration::dump(std::string& dump) const {
-    dump += INDENT4 "ViewportInternal:\n";
-    dumpViewport(dump, mInternalDisplay);
-    dump += INDENT4 "ViewportExternal:\n";
-    dumpViewport(dump, mExternalDisplay);
-    dump += INDENT4 "ViewportVirtual:\n";
-    for (const DisplayViewport& viewport : mVirtualDisplays) {
+    for (const DisplayViewport& viewport : mDisplays) {
         dumpViewport(dump, viewport);
     }
 }
 
-void InputReaderConfiguration::dumpViewport(std::string& dump, const DisplayViewport& viewport) const {
-    dump += StringPrintf(INDENT5 "Viewport: displayId=%d, orientation=%d, uniqueId='%s', "
-            "logicalFrame=[%d, %d, %d, %d], "
-            "physicalFrame=[%d, %d, %d, %d], "
-            "deviceSize=[%d, %d]\n",
-            viewport.displayId, viewport.orientation, viewport.uniqueId.c_str(),
-            viewport.logicalLeft, viewport.logicalTop,
-            viewport.logicalRight, viewport.logicalBottom,
-            viewport.physicalLeft, viewport.physicalTop,
-            viewport.physicalRight, viewport.physicalBottom,
-            viewport.deviceWidth, viewport.deviceHeight);
+void InputReaderConfiguration::dumpViewport(std::string& dump, const DisplayViewport& viewport)
+        const {
+    dump += StringPrintf(INDENT4 "%s\n", viewport.toString().c_str());
 }
 
 
@@ -473,10 +441,10 @@ void InputReader::addDeviceLocked(nsecs_t when, int32_t deviceId) {
 
     if (device->isIgnored()) {
         ALOGI("Device added: id=%d, name='%s' (ignored non-input device)", deviceId,
-                identifier.name.string());
+                identifier.name.c_str());
     } else {
         ALOGI("Device added: id=%d, name='%s', sources=0x%08x", deviceId,
-                identifier.name.string(), device->getSources());
+                identifier.name.c_str(), device->getSources());
     }
 
     mDevices.add(deviceId, device);
@@ -501,10 +469,10 @@ void InputReader::removeDeviceLocked(nsecs_t when, int32_t deviceId) {
 
     if (device->isIgnored()) {
         ALOGI("Device removed: id=%d, name='%s' (ignored non-input device)",
-                device->getId(), device->getName().string());
+                device->getId(), device->getName().c_str());
     } else {
         ALOGI("Device removed: id=%d, name='%s', sources=0x%08x",
-                device->getId(), device->getName().string(), device->getSources());
+                device->getId(), device->getName().c_str(), device->getSources());
     }
 
     if (device->getClasses() & INPUT_DEVICE_CLASS_EXTERNAL_STYLUS) {
@@ -687,7 +655,7 @@ bool InputReader::shouldDropVirtualKeyLocked(nsecs_t now,
     if (now < mDisableVirtualKeysTimeout) {
         ALOGI("Dropping virtual key from device %s because virtual keys are "
                 "temporarily disabled for the next %0.3fms.  keyCode=%d, scanCode=%d",
-                device->getName().string(),
+                device->getName().c_str(),
                 (mDisableVirtualKeysTimeout - now) * 0.000001,
                 keyCode, scanCode);
         return true;
@@ -894,7 +862,7 @@ void InputReader::dump(std::string& dump) {
         if (i != 0) {
             dump += ", ";
         }
-        dump += mConfig.excludedDeviceNames.itemAt(i).string();
+        dump += mConfig.excludedDeviceNames[i];
     }
     dump += "]\n";
     dump += StringPrintf(INDENT2 "VirtualKeyQuietTime: %0.1fms\n",
@@ -1077,7 +1045,7 @@ void InputDevice::dump(std::string& dump) {
     getDeviceInfo(& deviceInfo);
 
     dump += StringPrintf(INDENT "Device %d: %s\n", deviceInfo.getId(),
-            deviceInfo.getDisplayName().string());
+            deviceInfo.getDisplayName().c_str());
     dump += StringPrintf(INDENT2 "Generation: %d\n", mGeneration);
     dump += StringPrintf(INDENT2 "IsExternal: %s\n", toString(mIsExternal));
     dump += StringPrintf(INDENT2 "HasMic:     %s\n", toString(mHasMic));
@@ -1135,7 +1103,7 @@ void InputDevice::configure(nsecs_t when, const InputReaderConfiguration* config
 
         if (!changes || (changes & InputReaderConfiguration::CHANGE_DEVICE_ALIAS)) {
             if (!(mClasses & INPUT_DEVICE_CLASS_VIRTUAL)) {
-                String8 alias = mContext->getPolicy()->getDeviceAlias(mIdentifier);
+                std::string alias = mContext->getPolicy()->getDeviceAlias(mIdentifier);
                 if (mAlias != alias) {
                     mAlias = alias;
                     bumpGeneration();
@@ -1196,7 +1164,7 @@ void InputDevice::process(const RawEvent* rawEvents, size_t count) {
 #endif
             }
         } else if (rawEvent->type == EV_SYN && rawEvent->code == SYN_DROPPED) {
-            ALOGI("Detected input event buffer overrun for device %s.", getName().string());
+            ALOGI("Detected input event buffer overrun for device %s.", getName().c_str());
             mDropUntilNextSync = true;
             reset(rawEvent->when);
         } else {
@@ -2294,7 +2262,7 @@ void KeyboardInputMapper::configure(nsecs_t when,
     if (!changes || (changes & InputReaderConfiguration::CHANGE_DISPLAY_INFO)) {
         if (mParameters.orientationAware) {
             DisplayViewport dvp;
-            config->getDisplayViewport(ViewportType::VIEWPORT_INTERNAL, nullptr, &dvp);
+            config->getDisplayViewport(ViewportType::VIEWPORT_INTERNAL, "", &dvp);
             mViewport = dvp;
         }
     }
@@ -2464,7 +2432,7 @@ void KeyboardInputMapper::processKey(nsecs_t when, bool down, int32_t scanCode,
             // key was not actually down
             ALOGI("Dropping key up from device %s because the key was not down.  "
                     "keyCode=%d, scanCode=%d",
-                    getDeviceName().string(), keyCode, scanCode);
+                    getDeviceName().c_str(), keyCode, scanCode);
             return;
         }
     }
@@ -2705,7 +2673,7 @@ void CursorInputMapper::configure(nsecs_t when,
         mOrientation = DISPLAY_ORIENTATION_0;
         if (mParameters.orientationAware && mParameters.hasAssociatedDisplay) {
             DisplayViewport v;
-            if (config->getDisplayViewport(ViewportType::VIEWPORT_INTERNAL, nullptr, &v)) {
+            if (config->getDisplayViewport(ViewportType::VIEWPORT_INTERNAL, "", &v)) {
                 mOrientation = v.orientation;
             }
         }
@@ -3020,7 +2988,7 @@ void RotaryEncoderInputMapper::configure(nsecs_t when,
     }
     if (!changes || (changes & InputReaderConfiguration::CHANGE_DISPLAY_INFO)) {
         DisplayViewport v;
-        if (config->getDisplayViewport(ViewportType::VIEWPORT_INTERNAL, nullptr, &v)) {
+        if (config->getDisplayViewport(ViewportType::VIEWPORT_INTERNAL, "", &v)) {
             mOrientation = v.orientation;
         } else {
             mOrientation = DISPLAY_ORIENTATION_0;
@@ -3394,8 +3362,10 @@ void TouchInputMapper::configureParameters() {
         mParameters.hasAssociatedDisplay = true;
         if (mParameters.deviceType == Parameters::DEVICE_TYPE_TOUCH_SCREEN) {
             mParameters.associatedDisplayIsExternal = getDevice()->isExternal();
+            String8 uniqueDisplayId;
             getDevice()->getConfiguration().tryGetProperty(String8("touch.displayId"),
-                    mParameters.uniqueDisplayId);
+                    uniqueDisplayId);
+            mParameters.uniqueDisplayId = uniqueDisplayId.c_str();
         }
     }
 
@@ -3506,7 +3476,7 @@ void TouchInputMapper::configureSurface(nsecs_t when, bool* outResetNeeded) {
     // Ensure we have valid X and Y axes.
     if (!mRawPointerAxes.x.valid || !mRawPointerAxes.y.valid) {
         ALOGW(INDENT "Touch device '%s' did not report support for X or Y axis!  "
-                "The device will be inoperable.", getDeviceName().string());
+                "The device will be inoperable.", getDeviceName().c_str());
         mDeviceMode = DEVICE_MODE_DISABLED;
         return;
     }
@@ -3518,15 +3488,15 @@ void TouchInputMapper::configureSurface(nsecs_t when, bool* outResetNeeded) {
     // Get associated display dimensions.
     DisplayViewport newViewport;
     if (mParameters.hasAssociatedDisplay) {
-        const String8* uniqueDisplayId = nullptr;
+        std::string uniqueDisplayId;
         ViewportType viewportTypeToUse;
 
         if (mParameters.associatedDisplayIsExternal) {
             viewportTypeToUse = ViewportType::VIEWPORT_EXTERNAL;
-        } else if (!mParameters.uniqueDisplayId.isEmpty()) {
+        } else if (!mParameters.uniqueDisplayId.empty()) {
             // If the IDC file specified a unique display Id, then it expects to be linked to a
             // virtual display with the same unique ID.
-            uniqueDisplayId = &mParameters.uniqueDisplayId;
+            uniqueDisplayId = mParameters.uniqueDisplayId;
             viewportTypeToUse = ViewportType::VIEWPORT_VIRTUAL;
         } else {
             viewportTypeToUse = ViewportType::VIEWPORT_INTERNAL;
@@ -3536,7 +3506,7 @@ void TouchInputMapper::configureSurface(nsecs_t when, bool* outResetNeeded) {
             ALOGI(INDENT "Touch device '%s' could not query the properties of its associated "
                     "display.  The device will be inoperable until the display size "
                     "becomes available.",
-                    getDeviceName().string());
+                    getDeviceName().c_str());
             mDeviceMode = DEVICE_MODE_DISABLED;
             return;
         }
@@ -3597,6 +3567,12 @@ void TouchInputMapper::configureSurface(nsecs_t when, bool* outResetNeeded) {
                 break;
             }
 
+            if (naturalPhysicalHeight == 0 || naturalPhysicalWidth == 0) {
+                ALOGE("Viewport is not set properly: %s", mViewport.toString().c_str());
+                naturalPhysicalHeight = naturalPhysicalHeight == 0 ? 1 : naturalPhysicalHeight;
+                naturalPhysicalWidth = naturalPhysicalWidth == 0 ? 1 : naturalPhysicalWidth;
+            }
+
             mPhysicalWidth = naturalPhysicalWidth;
             mPhysicalHeight = naturalPhysicalHeight;
             mPhysicalLeft = naturalPhysicalLeft;
@@ -3642,7 +3618,7 @@ void TouchInputMapper::configureSurface(nsecs_t when, bool* outResetNeeded) {
     if (viewportChanged || deviceModeChanged) {
         ALOGI("Device reconfigured: id=%d, name='%s', size %dx%d, orientation %d, mode %d, "
                 "display id %d",
-                getDeviceId(), getDeviceName().string(), mSurfaceWidth, mSurfaceHeight,
+                getDeviceId(), getDeviceName().c_str(), mSurfaceWidth, mSurfaceHeight,
                 mSurfaceOrientation, mDeviceMode, mViewport.displayId);
 
         // Configure X and Y factors.
@@ -3910,17 +3886,7 @@ void TouchInputMapper::configureSurface(nsecs_t when, bool* outResetNeeded) {
 }
 
 void TouchInputMapper::dumpSurface(std::string& dump) {
-    dump += StringPrintf(INDENT3 "Viewport: displayId=%d, orientation=%d, "
-            "logicalFrame=[%d, %d, %d, %d], "
-            "physicalFrame=[%d, %d, %d, %d], "
-            "deviceSize=[%d, %d]\n",
-            mViewport.displayId, mViewport.orientation,
-            mViewport.logicalLeft, mViewport.logicalTop,
-            mViewport.logicalRight, mViewport.logicalBottom,
-            mViewport.physicalLeft, mViewport.physicalTop,
-            mViewport.physicalRight, mViewport.physicalBottom,
-            mViewport.deviceWidth, mViewport.deviceHeight);
-
+    dump += StringPrintf(INDENT3 "%s\n", mViewport.toString().c_str());
     dump += StringPrintf(INDENT3 "SurfaceWidth: %dpx\n", mSurfaceWidth);
     dump += StringPrintf(INDENT3 "SurfaceHeight: %dpx\n", mSurfaceHeight);
     dump += StringPrintf(INDENT3 "SurfaceLeft: %d\n", mSurfaceLeft);
@@ -6925,7 +6891,7 @@ void MultiTouchInputMapper::syncTouch(nsecs_t when, RawState* outState) {
 #if DEBUG_POINTERS
             ALOGD("MultiTouch device %s emitted more than maximum of %d pointers; "
                     "ignoring the rest.",
-                    getDeviceName().string(), MAX_POINTERS);
+                    getDeviceName().c_str(), MAX_POINTERS);
 #endif
             break; // too many fingers!
         }
@@ -7016,7 +6982,7 @@ void MultiTouchInputMapper::configureRawPointerAxes() {
         if (slotCount > MAX_SLOTS) {
             ALOGW("MultiTouch Device %s reported %zu slots but the framework "
                     "only supports a maximum of %zu slots at this time.",
-                    getDeviceName().string(), slotCount, MAX_SLOTS);
+                    getDeviceName().c_str(), slotCount, MAX_SLOTS);
             slotCount = MAX_SLOTS;
         }
         mMultiTouchMotionAccumulator.configure(getDevice(),
@@ -7259,7 +7225,7 @@ void JoystickInputMapper::configure(nsecs_t when,
         // Prefer to keep explicitly mapped axes.
         if (mAxes.size() > PointerCoords::MAX_AXES) {
             ALOGI("Joystick '%s' has %zu axes but the framework only supports a maximum of %d.",
-                    getDeviceName().string(), mAxes.size(), PointerCoords::MAX_AXES);
+                    getDeviceName().c_str(), mAxes.size(), PointerCoords::MAX_AXES);
             pruneAxes(true);
             pruneAxes(false);
         }
@@ -7281,7 +7247,7 @@ void JoystickInputMapper::configure(nsecs_t when,
                 } else {
                     ALOGI("Ignoring joystick '%s' axis %d because all of the generic axis ids "
                             "have already been assigned to other axes.",
-                            getDeviceName().string(), mAxes.keyAt(i));
+                            getDeviceName().c_str(), mAxes.keyAt(i));
                     mAxes.removeItemsAt(i--);
                     numAxes -= 1;
                 }
@@ -7310,7 +7276,7 @@ void JoystickInputMapper::pruneAxes(bool ignoreExplicitlyMappedAxes) {
             continue;
         }
         ALOGI("Discarding joystick '%s' axis %d because there are too many axes.",
-                getDeviceName().string(), mAxes.keyAt(i));
+                getDeviceName().c_str(), mAxes.keyAt(i));
         mAxes.removeItemsAt(i);
     }
 }

@@ -16,13 +16,12 @@
 
 #pragma once
 
-#include "RenderEngine/Image.h"
-#include "RenderEngine/RenderEngine.h"
-
 #include "BufferLayer.h"
 #include "Layer.h"
 
 #include <gui/GLConsumer.h>
+#include <renderengine/Image.h>
+#include <renderengine/RenderEngine.h>
 #include <system/window.h>
 #include <utils/String8.h>
 
@@ -30,8 +29,8 @@ namespace android {
 
 class BufferStateLayer : public BufferLayer {
 public:
-    BufferStateLayer(SurfaceFlinger* flinger, const sp<Client>& client, const String8& name,
-                     uint32_t w, uint32_t h, uint32_t flags);
+    explicit BufferStateLayer(const LayerCreationArgs&);
+    ~BufferStateLayer() override;
 
     // -----------------------------------------------------------------------
     // Interface implementation for Layer
@@ -59,7 +58,6 @@ public:
         return s.transparentRegionHint;
     }
     Rect getCrop(const Layer::State& s) const;
-    Rect getFinalCrop(const Layer::State& /*s*/) const { return Rect::EMPTY_RECT; }
 
     bool setTransform(uint32_t transform) override;
     bool setTransformToDisplayInverse(bool transformToDisplayInverse) override;
@@ -80,7 +78,6 @@ public:
 
     // Override to ignore legacy layer state properties that are not used by BufferStateLayer
     bool setCrop_legacy(const Rect& /*crop*/, bool /*immediate*/) override { return false; };
-    bool setFinalCrop_legacy(const Rect& /*crop*/, bool /*immediate*/) override { return false; };
     void deferTransactionUntil_legacy(const sp<IBinder>& /*barrierHandle*/,
                                       uint64_t /*frameNumber*/) override {}
     void deferTransactionUntil_legacy(const sp<Layer>& /*barrierLayer*/,
@@ -118,7 +115,8 @@ private:
     void setFilteringEnabled(bool enabled) override;
 
     status_t bindTextureImage() const override;
-    status_t updateTexImage(bool& recomputeVisibleRegions, nsecs_t latchTime) override;
+    status_t updateTexImage(bool& recomputeVisibleRegions, nsecs_t latchTime,
+                            const sp<Fence>& releaseFence) override;
 
     status_t updateActiveBuffer() override;
     status_t updateFrameNumber(nsecs_t latchTime) override;
@@ -128,13 +126,15 @@ private:
 private:
     void onFirstRef() override;
 
-    std::unique_ptr<RE::Image> mTextureImage;
+    static const std::array<float, 16> IDENTITY_MATRIX;
 
-    std::array<float, 16> mTransformMatrix;
+    std::unique_ptr<renderengine::Image> mTextureImage;
 
-    std::atomic<bool> mSidebandStreamChanged;
+    std::array<float, 16> mTransformMatrix{IDENTITY_MATRIX};
 
-    uint32_t mFrameNumber;
+    std::atomic<bool> mSidebandStreamChanged{false};
+
+    uint32_t mFrameNumber{0};
 
     // TODO(marissaw): support sticky transform for LEGACY camera mode
 };

@@ -16,6 +16,7 @@
 
 cc_library {
     name: "libinput",
+    cpp_std: "c++17",
     host_supported: true,
     cflags: [
         "-Wall",
@@ -46,11 +47,14 @@ cc_library {
                 "InputTransport.cpp",
                 "VelocityControl.cpp",
                 "VelocityTracker.cpp",
+                "InputApplication.cpp",
+                "InputWindow.cpp"
             ],
 
             shared_libs: [
                 "libutils",
                 "libbinder",
+                "libui"
             ],
 
             sanitize: {

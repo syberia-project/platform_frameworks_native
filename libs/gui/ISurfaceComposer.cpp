@@ -104,16 +104,13 @@ public:
 
     virtual status_t captureScreen(const sp<IBinder>& display, sp<GraphicBuffer>* outBuffer,
                                    Rect sourceCrop, uint32_t reqWidth, uint32_t reqHeight,
-                                   int32_t minLayerZ, int32_t maxLayerZ, bool useIdentityTransform,
-                                   ISurfaceComposer::Rotation rotation) {
+                                   bool useIdentityTransform, ISurfaceComposer::Rotation rotation) {
         Parcel data, reply;
         data.writeInterfaceToken(ISurfaceComposer::getInterfaceDescriptor());
         data.writeStrongBinder(display);
         data.write(sourceCrop);
         data.writeUint32(reqWidth);
         data.writeUint32(reqHeight);
-        data.writeInt32(minLayerZ);
-        data.writeInt32(maxLayerZ);
         data.writeInt32(static_cast<int32_t>(useIdentityTransform));
         data.writeInt32(static_cast<int32_t>(rotation));
         status_t result = remote()->transact(BnSurfaceComposer::CAPTURE_SCREEN, data, &reply);
@@ -327,34 +324,6 @@ public:
             memcpy(stats,
                     reply.readInplace(sizeof(DisplayStatInfo)),
                     sizeof(DisplayStatInfo));
-        }
-        return result;
-    }
-
-    virtual status_t getDisplayViewport(const sp<IBinder>& display, Rect* outViewport) {
-        Parcel data, reply;
-        status_t result = data.writeInterfaceToken(ISurfaceComposer::getInterfaceDescriptor());
-        if (result != NO_ERROR) {
-            ALOGE("getDisplayViewport failed to writeInterfaceToken: %d", result);
-            return result;
-        }
-        result = data.writeStrongBinder(display);
-        if (result != NO_ERROR) {
-            ALOGE("getDisplayViewport failed to writeStrongBinder: %d", result);
-            return result;
-        }
-        result = remote()->transact(BnSurfaceComposer::GET_DISPLAY_VIEWPORT, data, &reply);
-        if (result != NO_ERROR) {
-            ALOGE("getDisplayViewport failed to transact: %d", result);
-            return result;
-        }
-        result = reply.readInt32();
-        if (result == NO_ERROR) {
-            result = reply.read(*outViewport);
-            if (result != NO_ERROR) {
-                ALOGE("getDisplayViewport failed to read: %d", result);
-                return result;
-            }
         }
         return result;
     }
@@ -586,6 +555,25 @@ public:
         outLayers->clear();
         return reply.readParcelableVector(outLayers);
     }
+
+    virtual status_t getCompositionPreference(ui::Dataspace* dataSpace,
+                                              ui::PixelFormat* pixelFormat) const {
+        Parcel data, reply;
+        status_t error = data.writeInterfaceToken(ISurfaceComposer::getInterfaceDescriptor());
+        if (error != NO_ERROR) {
+            return error;
+        }
+        error = remote()->transact(BnSurfaceComposer::GET_COMPOSITION_PREFERENCE, data, &reply);
+        if (error != NO_ERROR) {
+            return error;
+        }
+        error = static_cast<status_t>(reply.readInt32());
+        if (error == NO_ERROR) {
+            *dataSpace = static_cast<ui::Dataspace>(reply.readInt32());
+            *pixelFormat = static_cast<ui::PixelFormat>(reply.readInt32());
+        }
+        return error;
+    }
 };
 
 // Out-of-line virtual method definition to trigger vtable emission in this
@@ -662,13 +650,11 @@ status_t BnSurfaceComposer::onTransact(
             data.read(sourceCrop);
             uint32_t reqWidth = data.readUint32();
             uint32_t reqHeight = data.readUint32();
-            int32_t minLayerZ = data.readInt32();
-            int32_t maxLayerZ = data.readInt32();
             bool useIdentityTransform = static_cast<bool>(data.readInt32());
             int32_t rotation = data.readInt32();
 
             status_t res = captureScreen(display, &outBuffer, sourceCrop, reqWidth, reqHeight,
-                                         minLayerZ, maxLayerZ, useIdentityTransform,
+                                         useIdentityTransform,
                                          static_cast<ISurfaceComposer::Rotation>(rotation));
             reply->writeInt32(res);
             if (res == NO_ERROR) {
@@ -772,26 +758,6 @@ status_t BnSurfaceComposer::onTransact(
             if (result == NO_ERROR) {
                 memcpy(reply->writeInplace(sizeof(DisplayStatInfo)),
                         &stats, sizeof(DisplayStatInfo));
-            }
-            return NO_ERROR;
-        }
-        case GET_DISPLAY_VIEWPORT: {
-            CHECK_INTERFACE(ISurfaceComposer, data, reply);
-            Rect outViewport;
-            sp<IBinder> display = nullptr;
-            status_t result = data.readStrongBinder(&display);
-            if (result != NO_ERROR) {
-                ALOGE("getDisplayViewport failed to readStrongBinder: %d", result);
-                return result;
-            }
-            result = getDisplayViewport(display, &outViewport);
-            result = reply->writeInt32(result);
-            if (result == NO_ERROR) {
-                result = reply->write(outViewport);
-                if (result != NO_ERROR) {
-                    ALOGE("getDisplayViewport failed to write: %d", result);
-                    return result;
-                }
             }
             return NO_ERROR;
         }
@@ -928,6 +894,18 @@ status_t BnSurfaceComposer::onTransact(
                 result = reply->writeParcelableVector(outLayers);
             }
             return result;
+        }
+        case GET_COMPOSITION_PREFERENCE: {
+            CHECK_INTERFACE(ISurfaceComposer, data, reply);
+            ui::Dataspace dataSpace;
+            ui::PixelFormat pixelFormat;
+            status_t error = getCompositionPreference(&dataSpace, &pixelFormat);
+            reply->writeInt32(error);
+            if (error == NO_ERROR) {
+                reply->writeInt32(static_cast<int32_t>(dataSpace));
+                reply->writeInt32(static_cast<int32_t>(pixelFormat));
+            }
+            return NO_ERROR;
         }
         default: {
             return BBinder::onTransact(code, data, reply, flags);

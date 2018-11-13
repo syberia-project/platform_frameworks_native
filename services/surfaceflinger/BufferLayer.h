@@ -24,13 +24,12 @@
 #include "FrameTracker.h"
 #include "LayerVector.h"
 #include "MonitoredProducer.h"
-#include "RenderEngine/Mesh.h"
-#include "RenderEngine/Texture.h"
 #include "SurfaceFlinger.h"
 
 #include <gui/ISurfaceComposerClient.h>
 #include <gui/LayerState.h>
-
+#include <renderengine/Mesh.h>
+#include <renderengine/Texture.h>
 #include <ui/FrameStats.h>
 #include <ui/GraphicBuffer.h>
 #include <ui/PixelFormat.h>
@@ -39,6 +38,8 @@
 #include <utils/RefBase.h>
 #include <utils/String8.h>
 #include <utils/Timers.h>
+
+#include <system/window.h> // For NATIVE_WINDOW_SCALING_MODE_FREEZE
 
 #include <stdint.h>
 #include <sys/types.h>
@@ -49,9 +50,7 @@ namespace android {
 class BufferLayer : public Layer {
 public:
     friend class ExBufferLayer;
-    BufferLayer(SurfaceFlinger* flinger, const sp<Client>& client, const String8& name, uint32_t w,
-                uint32_t h, uint32_t flags);
-
+    explicit BufferLayer(const LayerCreationArgs& args);
     ~BufferLayer() override;
 
     // -----------------------------------------------------------------------
@@ -79,7 +78,6 @@ public:
     // onDraw - draws the surface.
     void onDraw(const RenderArea& renderArea, const Region& clip,
                 bool useIdentityTransform) override;
-    void drawNow(const RenderArea& renderArea, bool useIdentityTransform);
 
     bool isHdrY410() const override;
 
@@ -94,7 +92,11 @@ public:
     // the visible regions need to be recomputed (this is a fairly heavy
     // operation, so this should be set only if needed). Typically this is used
     // to figure out if the content or size of a surface has changed.
-    Region latchBuffer(bool& recomputeVisibleRegions, nsecs_t latchTime) override;
+    // If there was a GL composition step rendering the previous frame, then
+    // releaseFence will be populated with a native fence that fires when
+    // composition has completed.
+    Region latchBuffer(bool& recomputeVisibleRegions, nsecs_t latchTime,
+                       const sp<Fence>& releaseFence) override;
 
     bool isBufferLatched() const override { return mRefreshPending; }
 
@@ -142,7 +144,8 @@ private:
     virtual void setFilteringEnabled(bool enabled) = 0;
 
     virtual status_t bindTextureImage() const = 0;
-    virtual status_t updateTexImage(bool& recomputeVisibleRegions, nsecs_t latchTime) = 0;
+    virtual status_t updateTexImage(bool& recomputeVisibleRegions, nsecs_t latchTime,
+                                    const sp<Fence>& flushFence) = 0;
 
     virtual status_t updateActiveBuffer() = 0;
     virtual status_t updateFrameNumber(nsecs_t latchTime) = 0;
@@ -179,15 +182,15 @@ private:
 
     uint64_t getHeadFrameNumber() const;
 
-    uint32_t mCurrentScalingMode;
+    uint32_t mCurrentScalingMode{NATIVE_WINDOW_SCALING_MODE_FREEZE};
 
     // main thread.
-    bool mBufferLatched; // TODO: Use mActiveBuffer?
+    bool mBufferLatched{false}; // TODO: Use mActiveBuffer?
 
     // The texture used to draw the layer in GLES composition mode
-    mutable Texture mTexture;
+    mutable renderengine::Texture mTexture;
 
-    bool mRefreshPending;
+    bool mRefreshPending{false};
 };
 
 } // namespace android

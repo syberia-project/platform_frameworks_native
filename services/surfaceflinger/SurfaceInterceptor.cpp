@@ -96,8 +96,9 @@ void SurfaceInterceptor::addInitialSurfaceStateLocked(Increment* increment,
         const sp<const Layer>& layer)
 {
     Transaction* transaction(increment->mutable_transaction());
-    transaction->set_synchronous(layer->mTransactionFlags & BnSurfaceComposer::eSynchronous);
-    transaction->set_animation(layer->mTransactionFlags & BnSurfaceComposer::eAnimation);
+    const uint32_t layerFlags = layer->getTransactionFlags();
+    transaction->set_synchronous(layerFlags & BnSurfaceComposer::eSynchronous);
+    transaction->set_animation(layerFlags & BnSurfaceComposer::eAnimation);
 
     const int32_t layerId(getLayerId(layer));
     addPositionLocked(transaction, layerId, layer->mCurrentState.active_legacy.transform.tx(),
@@ -113,7 +114,6 @@ void SurfaceInterceptor::addInitialSurfaceStateLocked(Increment* increment,
                                   layer->mCurrentState.barrierLayer_legacy.promote(),
                                   layer->mCurrentState.frameNumber_legacy);
     }
-    addFinalCropLocked(transaction, layerId, layer->mCurrentState.finalCrop_legacy);
     addOverrideScalingModeLocked(transaction, layerId, layer->getEffectiveScalingMode());
     addFlagsLocked(transaction, layerId, layer->mCurrentState.flags);
 }
@@ -289,15 +289,6 @@ void SurfaceInterceptor::addCropLocked(Transaction* transaction, int32_t layerId
     setProtoRectLocked(protoRect, rect);
 }
 
-void SurfaceInterceptor::addFinalCropLocked(Transaction* transaction, int32_t layerId,
-        const Rect& rect)
-{
-    SurfaceChange* change(createSurfaceChangeLocked(transaction, layerId));
-    FinalCropChange* finalCropChange(change->mutable_final_crop());
-    Rectangle* protoRect(finalCropChange->mutable_rectangle());
-    setProtoRectLocked(protoRect, rect);
-}
-
 void SurfaceInterceptor::addDeferTransactionLocked(Transaction* transaction, int32_t layerId,
         const sp<const Layer>& layer, uint64_t frameNumber)
 {
@@ -373,9 +364,6 @@ void SurfaceInterceptor::addSurfaceChangesLocked(Transaction* transaction,
             }
         }
         addDeferTransactionLocked(transaction, layerId, otherLayer, state.frameNumber_legacy);
-    }
-    if (state.what & layer_state_t::eFinalCropChanged_legacy) {
-        addFinalCropLocked(transaction, layerId, state.finalCrop_legacy);
     }
     if (state.what & layer_state_t::eOverrideScalingModeChanged) {
         addOverrideScalingModeLocked(transaction, layerId, state.overrideScalingMode);

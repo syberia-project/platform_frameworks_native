@@ -4,6 +4,7 @@ cc_defaults {
         "-DLOG_TAG=\"SurfaceFlinger\"",
         "-Wall",
         "-Werror",
+        "-Wformat",
         "-Wthread-safety",
         "-Wunused",
         "-Wunreachable-code",
@@ -17,6 +18,10 @@ cc_defaults {
     cflags: [
         "-DGL_GLEXT_PROTOTYPES",
         "-DEGL_EGLEXT_PROTOTYPES",
+    ],
+    include_dirs: [
+        "frameworks/native/vulkan/vkjson",
+        "frameworks/native/vulkan/include",
     ],
     shared_libs: [
         "android.frameworks.vr.composer@1.0",
@@ -48,6 +53,7 @@ cc_defaults {
         "libhwbinder",
         "liblayers_proto",
         "liblog",
+    	"libnativewindow",
         "libpdx_default_transport",
         "libprotobuf-cpp-lite",
         "libsync",
@@ -57,6 +63,7 @@ cc_defaults {
         "libvulkan",
     ],
     static_libs: [
+        "librenderengine",
         "libserviceutils",
         "libtrace_proto",
         "libvkjson",
@@ -66,9 +73,11 @@ cc_defaults {
     header_libs: [
         "android.hardware.graphics.composer@2.1-command-buffer",
         "android.hardware.graphics.composer@2.2-command-buffer",
+        "android.hardware.graphics.composer@2.3-command-buffer",
         "display_intf_headers",
     ],
     export_static_lib_headers: [
+        "librenderengine",
         "libserviceutils",
     ],
     export_shared_lib_headers: [
@@ -81,6 +90,18 @@ cc_defaults {
         "libhidltransport",
         "libhwbinder",
     ],
+}
+
+cc_defaults {
+    name: "libsurfaceflinger_production_defaults",
+    defaults: ["libsurfaceflinger_defaults"],
+    cflags: [
+        "-fvisibility=hidden",
+        "-fwhole-program-vtables", // requires ThinLTO
+    ],
+    lto: {
+        thin: true,
+    },
 }
 
 cc_library_headers {
@@ -120,22 +141,14 @@ filegroup {
         "LayerStats.cpp",
         "LayerVector.cpp",
         "MonitoredProducer.cpp",
+        "NativeWindowSurface.cpp",
         "RenderArea.cpp",
-        "RenderEngine/Description.cpp",
-        "RenderEngine/GLES20RenderEngine.cpp",
-        "RenderEngine/GLExtensions.cpp",
-        "RenderEngine/Image.cpp",
-        "RenderEngine/Mesh.cpp",
-        "RenderEngine/Program.cpp",
-        "RenderEngine/ProgramCache.cpp",
-        "RenderEngine/RenderEngine.cpp",
-        "RenderEngine/Surface.cpp",
-        "RenderEngine/Texture.cpp",
         "Scheduler/DispSync.cpp",
         "Scheduler/DispSyncSource.cpp",
         "Scheduler/EventControlThread.cpp",
         "Scheduler/EventThread.cpp",
         "Scheduler/MessageQueue.cpp",
+        "Scheduler/Scheduler.cpp",
         "StartPropertySetThread.cpp",
         "SurfaceFlinger.cpp",
         "SurfaceInterceptor.cpp",
@@ -149,33 +162,23 @@ filegroup {
 }
 
 cc_library_shared {
+    // Please use libsurfaceflinger_defaults to configure how the sources are
+    // built, so the same settings can be used elsewhere.
     name: "libsurfaceflinger",
-    defaults: ["libsurfaceflinger_defaults"],
-    cflags: [
-        "-fvisibility=hidden",
-        "-Werror=format",
-    ],
+    defaults: ["libsurfaceflinger_production_defaults"],
     srcs: [
         ":libsurfaceflinger_sources",
+
+        // Note: SurfaceFlingerFactory is not in the default sources so that it
+        // can be easily replaced.
+        "SurfaceFlingerFactory.cpp",
     ],
     logtags: ["EventLog/EventLogTags.logtags"],
-    include_dirs: [
-        "frameworks/native/vulkan/vkjson",
-        "frameworks/native/vulkan/include",
-    ],
-    cppflags: [
-        "-fwhole-program-vtables", // requires ThinLTO
-    ],
-    lto: {
-        thin: true,
-    },
 }
 
-cc_binary {
-    name: "surfaceflinger",
+cc_defaults {
+    name: "libsurfaceflinger_binary",
     defaults: ["surfaceflinger_defaults"],
-    init_rc: ["surfaceflinger.rc"],
-    srcs: ["main_surfaceflinger.cpp"],
     whole_static_libs: [
         "libsigchain",
     ],
@@ -192,7 +195,6 @@ cc_binary {
         "libhidltransport",
         "liblayers_proto",
         "liblog",
-        "libsurfaceflinger",
         "libtimestats_proto",
         "libutils",
     ],
@@ -201,19 +203,19 @@ cc_binary {
         "libtrace_proto",
     ],
     ldflags: ["-Wl,--export-dynamic"],
+}
 
-    // TODO(b/71715793): These version-scripts are required due to the use of
-    // whole_static_libs to pull in libsigchain. To work, the files had to be
-    // locally duplicated from their original location
-    // $ANDROID_ROOT/art/sigchainlib/
-    multilib: {
-        lib32: {
-            version_script: "version-script32.txt",
-        },
-        lib64: {
-            version_script: "version-script64.txt",
-        },
-    },
+filegroup {
+    name: "surfaceflinger_binary_sources",
+    srcs: ["main_surfaceflinger.cpp"],
+}
+
+cc_binary {
+    name: "surfaceflinger",
+    defaults: ["libsurfaceflinger_binary"],
+    init_rc: ["surfaceflinger.rc"],
+    srcs: [":surfaceflinger_binary_sources"],
+    shared_libs: ["libsurfaceflinger"],
 }
 
 cc_library_shared {

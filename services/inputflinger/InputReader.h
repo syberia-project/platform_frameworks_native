@@ -38,6 +38,7 @@
 #include <optional>
 #include <stddef.h>
 #include <unistd.h>
+#include <vector>
 
 // Maximum supported size of a vibration pattern.
 // Must be at least 2.
@@ -101,7 +102,7 @@ struct InputReaderConfiguration {
 
     // The excluded device names for the platform.
     // Devices with these names will be ignored.
-    Vector<String8> excludedDeviceNames;
+    std::vector<std::string> excludedDeviceNames;
 
     // Velocity control parameters for mouse pointer movements.
     VelocityControlParameters pointerVelocityControlParameters;
@@ -201,19 +202,16 @@ struct InputReaderConfiguration {
             pointerGestureZoomSpeedRatio(0.3f),
             showTouches(false) { }
 
-    bool getDisplayViewport(ViewportType viewportType, const String8* displayId,
+    bool getDisplayViewport(ViewportType viewportType, const std::string& uniqueDisplayId,
             DisplayViewport* outViewport) const;
-    void setPhysicalDisplayViewport(ViewportType viewportType, const DisplayViewport& viewport);
-    void setVirtualDisplayViewports(const Vector<DisplayViewport>& viewports);
+    void setDisplayViewports(const std::vector<DisplayViewport>& viewports);
 
 
     void dump(std::string& dump) const;
     void dumpViewport(std::string& dump, const DisplayViewport& viewport) const;
 
 private:
-    DisplayViewport mInternalDisplay;
-    DisplayViewport mExternalDisplay;
-    Vector<DisplayViewport> mVirtualDisplays;
+    std::vector<DisplayViewport> mDisplays;
 };
 
 
@@ -274,11 +272,11 @@ public:
             const InputDeviceIdentifier& identifier) = 0;
 
     /* Gets a user-supplied alias for a particular input device, or an empty string if none. */
-    virtual String8 getDeviceAlias(const InputDeviceIdentifier& identifier) = 0;
+    virtual std::string getDeviceAlias(const InputDeviceIdentifier& identifier) = 0;
 
     /* Gets the affine calibration associated with the specified device. */
     virtual TouchAffineTransformation getTouchAffineTransformation(
-            const String8& inputDeviceDescriptor, int32_t surfaceRotation) = 0;
+            const std::string& inputDeviceDescriptor, int32_t surfaceRotation) = 0;
 };
 
 
@@ -553,8 +551,8 @@ public:
     inline int32_t getId() const { return mId; }
     inline int32_t getControllerNumber() const { return mControllerNumber; }
     inline int32_t getGeneration() const { return mGeneration; }
-    inline const String8& getName() const { return mIdentifier.name; }
-    inline const String8& getDescriptor() { return mIdentifier.descriptor; }
+    inline const std::string getName() const { return mIdentifier.name; }
+    inline const std::string getDescriptor() { return mIdentifier.descriptor; }
     inline uint32_t getClasses() const { return mClasses; }
     inline uint32_t getSources() const { return mSources; }
 
@@ -625,7 +623,7 @@ private:
     int32_t mGeneration;
     int32_t mControllerNumber;
     InputDeviceIdentifier mIdentifier;
-    String8 mAlias;
+    std::string mAlias;
     uint32_t mClasses;
 
     Vector<InputMapper*> mMappers;
@@ -981,7 +979,7 @@ public:
 
     inline InputDevice* getDevice() { return mDevice; }
     inline int32_t getDeviceId() { return mDevice->getId(); }
-    inline const String8 getDeviceName() { return mDevice->getName(); }
+    inline const std::string getDeviceName() { return mDevice->getName(); }
     inline InputReaderContext* getContext() { return mContext; }
     inline InputReaderPolicyInterface* getPolicy() { return mContext->getPolicy(); }
     inline InputListenerInterface* getListener() { return mContext->getListener(); }
@@ -1309,7 +1307,7 @@ protected:
         bool associatedDisplayIsExternal;
         bool orientationAware;
         bool hasButtonUnderPad;
-        String8 uniqueDisplayId;
+        std::string uniqueDisplayId;
 
         enum GestureMode {
             GESTURE_MODE_SINGLE_TOUCH,

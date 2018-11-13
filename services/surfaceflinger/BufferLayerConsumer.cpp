@@ -20,10 +20,7 @@
 //#define LOG_NDEBUG 0
 
 #include "BufferLayerConsumer.h"
-
 #include "Layer.h"
-#include "RenderEngine/Image.h"
-#include "RenderEngine/RenderEngine.h"
 #include "Scheduler/DispSync.h"
 
 #include <inttypes.h>
@@ -38,9 +35,9 @@
 #include <gui/GLConsumer.h>
 #include <gui/ISurfaceComposer.h>
 #include <gui/SurfaceComposerClient.h>
-
 #include <private/gui/ComposerService.h>
-
+#include <renderengine/Image.h>
+#include <renderengine/RenderEngine.h>
 #include <utils/Log.h>
 #include <utils/String8.h>
 #include <utils/Trace.h>
@@ -57,7 +54,8 @@ namespace android {
 static const mat4 mtxIdentity;
 
 BufferLayerConsumer::BufferLayerConsumer(const sp<IGraphicBufferConsumer>& bq,
-                                         RE::RenderEngine& engine, uint32_t tex, Layer* layer)
+                                         renderengine::RenderEngine& engine, uint32_t tex,
+                                         Layer* layer)
       : ConsumerBase(bq, false),
         mCurrentCrop(Rect::EMPTY_RECT),
         mCurrentTransform(0),
@@ -149,7 +147,8 @@ nsecs_t BufferLayerConsumer::computeExpectedPresent(const DispSync& dispSync) {
 
 status_t BufferLayerConsumer::updateTexImage(BufferRejecter* rejecter, const DispSync& dispSync,
                                              bool* autoRefresh, bool* queuedBuffer,
-                                             uint64_t maxFrameNumber) {
+                                             uint64_t maxFrameNumber,
+                                             const sp<Fence>& releaseFence) {
     ATRACE_CALL();
     BLC_LOGV("updateTexImage");
     Mutex::Autolock lock(mMutex);
@@ -200,12 +199,12 @@ status_t BufferLayerConsumer::updateTexImage(BufferRejecter* rejecter, const Dis
     }
 
     // Release the previous buffer.
-    err = updateAndReleaseLocked(item, &mPendingRelease);
+    err = updateAndReleaseLocked(item, &mPendingRelease, releaseFence);
     if (err != NO_ERROR) {
         return err;
     }
 
-    if (mRE.useNativeFenceSync()) {
+    if (!mRE.useNativeFenceSync()) {
         // Bind the new buffer to the GL texture.
         //
         // Older devices require the "implicit" synchronization provided
@@ -280,14 +279,15 @@ status_t BufferLayerConsumer::acquireBufferLocked(BufferItem* item, nsecs_t pres
 }
 
 status_t BufferLayerConsumer::updateAndReleaseLocked(const BufferItem& item,
-                                                     PendingRelease* pendingRelease) {
+                                                     PendingRelease* pendingRelease,
+                                                     const sp<Fence>& releaseFence) {
     status_t err = NO_ERROR;
 
     int slot = item.mSlot;
 
     // Do whatever sync ops we need to do before releasing the old slot.
     if (slot != mCurrentTexture) {
-        err = syncForReleaseLocked();
+        err = syncForReleaseLocked(releaseFence);
         if (err != NO_ERROR) {
             // Release the buffer we just acquired.  It's not safe to
             // release the old buffer, so instead we just drop the new frame.
@@ -369,19 +369,19 @@ status_t BufferLayerConsumer::bindTextureImageLocked() {
     return doFenceWaitLocked();
 }
 
-status_t BufferLayerConsumer::syncForReleaseLocked() {
+status_t BufferLayerConsumer::syncForReleaseLocked(const sp<Fence>& releaseFence) {
     BLC_LOGV("syncForReleaseLocked");
 
     if (mCurrentTexture != BufferQueue::INVALID_BUFFER_SLOT) {
-        if (mRE.useNativeFenceSync()) {
-            base::unique_fd fenceFd = mRE.flush();
-            if (fenceFd == -1) {
+        if (mRE.useNativeFenceSync() && releaseFence != Fence::NO_FENCE) {
+            // TODO(alecmouri): fail further upstream if the fence is invalid
+            if (!releaseFence->isValid()) {
                 BLC_LOGE("syncForReleaseLocked: failed to flush RenderEngine");
                 return UNKNOWN_ERROR;
             }
-            sp<Fence> fence(new Fence(std::move(fenceFd)));
-            status_t err = addReleaseFenceLocked(mCurrentTexture,
-                                                 mCurrentTextureImage->graphicBuffer(), fence);
+            status_t err =
+                    addReleaseFenceLocked(mCurrentTexture, mCurrentTextureImage->graphicBuffer(),
+                                          releaseFence);
             if (err != OK) {
                 BLC_LOGE("syncForReleaseLocked: error adding release fence: "
                          "%s (%d)",
@@ -595,7 +595,8 @@ void BufferLayerConsumer::dumpLocked(String8& result, const char* prefix) const 
     ConsumerBase::dumpLocked(result, prefix);
 }
 
-BufferLayerConsumer::Image::Image(sp<GraphicBuffer> graphicBuffer, RE::RenderEngine& engine)
+BufferLayerConsumer::Image::Image(sp<GraphicBuffer> graphicBuffer,
+                                  renderengine::RenderEngine& engine)
       : mGraphicBuffer(graphicBuffer),
         mImage{engine.createImage()},
         mCreated(false),

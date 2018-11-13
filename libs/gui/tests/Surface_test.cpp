@@ -135,7 +135,7 @@ TEST_F(SurfaceTest, ScreenshotsOfProtectedBuffersSucceed) {
             ISurfaceComposer::eDisplayIdMain));
     sp<GraphicBuffer> outBuffer;
     ASSERT_EQ(NO_ERROR, sf->captureScreen(display, &outBuffer, Rect(),
-            64, 64, 0, 0x7fffffff, false));
+            64, 64, false));
 
     ASSERT_EQ(NO_ERROR, native_window_api_connect(anw.get(),
             NATIVE_WINDOW_API_CPU));
@@ -166,7 +166,7 @@ TEST_F(SurfaceTest, ScreenshotsOfProtectedBuffersSucceed) {
         ASSERT_EQ(NO_ERROR, anw->queueBuffer(anw.get(), buf, -1));
     }
     ASSERT_EQ(NO_ERROR, sf->captureScreen(display, &outBuffer, Rect(),
-            64, 64, 0, 0x7fffffff, false));
+            64, 64, false));
 }
 
 TEST_F(SurfaceTest, ConcreteTypeIsSurface) {
@@ -581,9 +581,6 @@ public:
             Vector<DisplayInfo>* /*configs*/) override { return NO_ERROR; }
     status_t getDisplayStats(const sp<IBinder>& /*display*/,
             DisplayStatInfo* /*stats*/) override { return NO_ERROR; }
-    status_t getDisplayViewport(const sp<IBinder>& /*display*/, Rect* /*outViewport*/) override {
-        return NO_ERROR;
-    }
     int getActiveConfig(const sp<IBinder>& /*display*/) override { return 0; }
     status_t setActiveConfig(const sp<IBinder>& /*display*/, int /*id*/)
             override {
@@ -602,7 +599,6 @@ public:
     status_t captureScreen(const sp<IBinder>& /*display*/,
             sp<GraphicBuffer>* /*outBuffer*/,
             Rect /*sourceCrop*/, uint32_t /*reqWidth*/, uint32_t /*reqHeight*/,
-            int32_t /*minLayerZ*/, int32_t /*maxLayerZ*/,
             bool /*useIdentityTransform*/,
             Rotation /*rotation*/) override { return NO_ERROR; }
     virtual status_t captureLayers(const sp<IBinder>& /*parentHandle*/,
@@ -623,6 +619,10 @@ public:
     }
     status_t injectVSync(nsecs_t /*when*/) override { return NO_ERROR; }
     status_t getLayerDebugInfo(std::vector<LayerDebugInfo>* /*layers*/) const override {
+        return NO_ERROR;
+    }
+    status_t getCompositionPreference(ui::Dataspace* /*outDataSpace*/,
+                                      ui::PixelFormat* /*outPixelFormat*/) const override {
         return NO_ERROR;
     }
 

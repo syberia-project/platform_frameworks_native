@@ -116,7 +116,7 @@ public:
     // These mocks are created by the test, but are destroyed by SurfaceFlinger
     // by virtue of being stored into a std::unique_ptr. However we still need
     // to keep a reference to them for use in setting up call expectations.
-    RE::mock::RenderEngine* mRenderEngine = new RE::mock::RenderEngine();
+    renderengine::mock::RenderEngine* mRenderEngine = new renderengine::mock::RenderEngine();
     Hwc2::mock::Composer* mComposer = nullptr;
     mock::MessageQueue* mMessageQueue = new mock::MessageQueue();
     mock::SurfaceInterceptor* mSurfaceInterceptor = new mock::SurfaceInterceptor();
@@ -125,9 +125,9 @@ public:
     // These mocks are created only when expected to be created via a factory.
     sp<mock::GraphicBufferConsumer> mConsumer;
     sp<mock::GraphicBufferProducer> mProducer;
-    mock::NativeWindowSurface* mNativeWindowSurface = nullptr;
+    surfaceflinger::mock::NativeWindowSurface* mNativeWindowSurface = nullptr;
     sp<mock::NativeWindow> mNativeWindow;
-    RE::mock::Surface* mRenderSurface = nullptr;
+    renderengine::mock::Surface* mRenderSurface = nullptr;
 };
 
 DisplayTransactionTest::DisplayTransactionTest() {
@@ -155,7 +155,7 @@ DisplayTransactionTest::DisplayTransactionTest() {
     mFlinger.mutableEventControlThread().reset(mEventControlThread);
     mFlinger.mutableEventThread().reset(mEventThread);
     mFlinger.mutableEventQueue().reset(mMessageQueue);
-    mFlinger.setupRenderEngine(std::unique_ptr<RE::RenderEngine>(mRenderEngine));
+    mFlinger.setupRenderEngine(std::unique_ptr<renderengine::RenderEngine>(mRenderEngine));
     mFlinger.mutableInterceptor().reset(mSurfaceInterceptor);
     mFlinger.mutablePrimaryDispSync().reset(mPrimaryDispSync);
 
@@ -195,11 +195,12 @@ void DisplayTransactionTest::injectFakeNativeWindowSurfaceFactory() {
     // This setup is only expected once per test.
     ASSERT_TRUE(mNativeWindowSurface == nullptr);
 
-    mNativeWindowSurface = new mock::NativeWindowSurface();
+    mNativeWindowSurface = new surfaceflinger::mock::NativeWindowSurface();
     mNativeWindow = new mock::NativeWindow();
 
-    mFlinger.setCreateNativeWindowSurface(
-            [this](auto) { return std::unique_ptr<NativeWindowSurface>(mNativeWindowSurface); });
+    mFlinger.setCreateNativeWindowSurface([this](auto) {
+        return std::unique_ptr<surfaceflinger::NativeWindowSurface>(mNativeWindowSurface);
+    });
 }
 
 bool DisplayTransactionTest::hasHwcDisplay(hwc2_display_t displayId) {
@@ -277,14 +278,15 @@ struct DisplayVariant {
         // For simplicity, we only expect to create a single render surface for
         // each test.
         ASSERT_TRUE(test->mRenderSurface == nullptr);
-        test->mRenderSurface = new RE::mock::Surface();
+        test->mRenderSurface = new renderengine::mock::Surface();
         EXPECT_CALL(*test->mRenderEngine, createSurface())
-                .WillOnce(Return(ByMove(std::unique_ptr<RE::Surface>(test->mRenderSurface))));
+                .WillOnce(Return(ByMove(
+                        std::unique_ptr<renderengine::Surface>(test->mRenderSurface))));
         EXPECT_CALL(*test->mRenderSurface, setAsync(static_cast<bool>(ASYNC))).Times(1);
         EXPECT_CALL(*test->mRenderSurface, setCritical(static_cast<bool>(CRITICAL))).Times(1);
         EXPECT_CALL(*test->mRenderSurface, setNativeWindow(test->mNativeWindow.get())).Times(1);
-        EXPECT_CALL(*test->mRenderSurface, queryWidth()).WillOnce(Return(WIDTH));
-        EXPECT_CALL(*test->mRenderSurface, queryHeight()).WillOnce(Return(HEIGHT));
+        EXPECT_CALL(*test->mRenderSurface, getWidth()).WillOnce(Return(WIDTH));
+        EXPECT_CALL(*test->mRenderSurface, getHeight()).WillOnce(Return(HEIGHT));
     }
 
     static void setupFramebufferConsumerBufferQueueCallExpectations(DisplayTransactionTest* test) {
@@ -661,7 +663,7 @@ using NonHwcVirtualDisplayCase =
 using SimpleHwcVirtualDisplayVariant = HwcVirtualDisplayVariant<1024, 768, Secure::TRUE>;
 using HwcVirtualDisplayCase =
         Case<SimpleHwcVirtualDisplayVariant, WideColorSupportNotConfiguredVariant,
-             HdrNotSupportedVariant<SimpleHwcVirtualDisplayVariant>, 
+             HdrNotSupportedVariant<SimpleHwcVirtualDisplayVariant>,
              NoPerFrameMetadataSupportVariant<SimpleHwcVirtualDisplayVariant>>;
 using WideColorP3ColorimetricDisplayCase =
         Case<PrimaryDisplayVariant, WideColorP3ColorimetricSupportedVariant<PrimaryDisplayVariant>,
@@ -1303,6 +1305,8 @@ void HandleTransactionLockedTest::processesHotplugDisconnectCommon() {
     // Call Expectations
 
     EXPECT_CALL(*mComposer, isUsingVrComposer()).WillRepeatedly(Return(false));
+    EXPECT_CALL(*mComposer, getDisplayIdentificationData(Case::Display::HWC_DISPLAY_ID, _, _))
+            .Times(0);
 
     setupCommonCallExpectationsForDisconnectProcessing<Case>();
 
@@ -1735,11 +1739,11 @@ TEST_F(HandleTransactionLockedTest, processesDisplayWidthChanges) {
     // A display is set up
     auto nativeWindow = new mock::NativeWindow();
     auto displaySurface = new mock::DisplaySurface();
-    auto renderSurface = new RE::mock::Surface();
+    auto renderSurface = new renderengine::mock::Surface();
     auto display = Case::Display::makeFakeExistingDisplayInjector(this);
     display.setNativeWindow(nativeWindow);
     display.setDisplaySurface(displaySurface);
-    display.setRenderSurface(std::unique_ptr<RE::Surface>(renderSurface));
+    display.setRenderSurface(std::unique_ptr<renderengine::Surface>(renderSurface));
     display.inject();
 
     // There is a change to the viewport state
@@ -1754,8 +1758,8 @@ TEST_F(HandleTransactionLockedTest, processesDisplayWidthChanges) {
     EXPECT_CALL(*renderSurface, setNativeWindow(nullptr)).Times(1);
     EXPECT_CALL(*displaySurface, resizeBuffers(newWidth, oldHeight)).Times(1);
     EXPECT_CALL(*renderSurface, setNativeWindow(nativeWindow)).Times(1);
-    EXPECT_CALL(*renderSurface, queryWidth()).WillOnce(Return(newWidth));
-    EXPECT_CALL(*renderSurface, queryHeight()).WillOnce(Return(oldHeight));
+    EXPECT_CALL(*renderSurface, getWidth()).WillOnce(Return(newWidth));
+    EXPECT_CALL(*renderSurface, getHeight()).WillOnce(Return(oldHeight));
 
     // --------------------------------------------------------------------
     // Invocation
@@ -1776,11 +1780,11 @@ TEST_F(HandleTransactionLockedTest, processesDisplayHeightChanges) {
     // A display is set up
     auto nativeWindow = new mock::NativeWindow();
     auto displaySurface = new mock::DisplaySurface();
-    auto renderSurface = new RE::mock::Surface();
+    auto renderSurface = new renderengine::mock::Surface();
     auto display = Case::Display::makeFakeExistingDisplayInjector(this);
     display.setNativeWindow(nativeWindow);
     display.setDisplaySurface(displaySurface);
-    display.setRenderSurface(std::unique_ptr<RE::Surface>(renderSurface));
+    display.setRenderSurface(std::unique_ptr<renderengine::Surface>(renderSurface));
     display.inject();
 
     // There is a change to the viewport state
@@ -1795,8 +1799,8 @@ TEST_F(HandleTransactionLockedTest, processesDisplayHeightChanges) {
     EXPECT_CALL(*renderSurface, setNativeWindow(nullptr)).Times(1);
     EXPECT_CALL(*displaySurface, resizeBuffers(oldWidth, newHeight)).Times(1);
     EXPECT_CALL(*renderSurface, setNativeWindow(nativeWindow)).Times(1);
-    EXPECT_CALL(*renderSurface, queryWidth()).WillOnce(Return(oldWidth));
-    EXPECT_CALL(*renderSurface, queryHeight()).WillOnce(Return(newHeight));
+    EXPECT_CALL(*renderSurface, getWidth()).WillOnce(Return(oldWidth));
+    EXPECT_CALL(*renderSurface, getHeight()).WillOnce(Return(newHeight));
 
     // --------------------------------------------------------------------
     // Invocation
