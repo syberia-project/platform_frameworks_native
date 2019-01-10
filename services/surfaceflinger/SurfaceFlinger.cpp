@@ -381,6 +381,26 @@ SurfaceFlinger::SurfaceFlinger() : SurfaceFlinger(SkipInitialization) {
         // for production purposes later on.
         setenv("TREBLE_TESTING_OVERRIDE", "true", true);
     }
+
+    mIsDolphinEnabled = property_get_bool("vendor.perf.dolphin.enable", false);
+    if (mIsDolphinEnabled) {
+        mDolphinHandle = dlopen("libdolphin.so", RTLD_NOW);
+        if (!mDolphinHandle) {
+            ALOGW("Unable to open libdolphin.so: %s.", dlerror());
+        } else {
+            mDolphinInit = (bool (*) ())dlsym(mDolphinHandle, "dolphinInit");
+            mDolphinOnFrameAvailable =
+                (void (*) (bool, int, int32_t, int32_t, String8))dlsym(mDolphinHandle,
+                                                                       "dolphinOnFrameAvailable");
+            mDolphinMonitor = (bool (*) (int))dlsym(mDolphinHandle, "dolphinMonitor");
+            mDolphinRefresh = (void (*) ())dlsym(mDolphinHandle, "dolphinRefresh");
+            if (mDolphinInit != nullptr && mDolphinOnFrameAvailable != nullptr &&
+                mDolphinMonitor != nullptr && mDolphinRefresh != nullptr) {
+                if (mDolphinInit()) mDolphinFuncsEnabled = true;
+            }
+            if (!mDolphinFuncsEnabled) dlclose(mDolphinHandle);
+        }
+    }
 }
 
 void SurfaceFlinger::onFirstRef()
@@ -390,6 +410,7 @@ void SurfaceFlinger::onFirstRef()
 
 SurfaceFlinger::~SurfaceFlinger()
 {
+    if (mDolphinFuncsEnabled) dlclose(mDolphinHandle);
 }
 
 void SurfaceFlinger::binderDied(const wp<IBinder>& /* who */)
@@ -516,6 +537,27 @@ void SurfaceFlinger::bootFinished()
         mBootStage = BootStage::FINISHED;
     });
     postMessageAsync(readProperties);
+}
+
+uint32_t SurfaceFlinger::getNewTexture() {
+    {
+        std::lock_guard lock(mTexturePoolMutex);
+        if (!mTexturePool.empty()) {
+            uint32_t name = mTexturePool.back();
+            mTexturePool.pop_back();
+            ATRACE_INT("TexturePoolSize", mTexturePool.size());
+            return name;
+        }
+
+        // The pool was too small, so increase it for the future
+        ++mTexturePoolSize;
+    }
+
+    // The pool was empty, so we need to get a new texture name directly using a
+    // blocking call to the main thread
+    uint32_t name = 0;
+    postMessageSync(new LambdaMessage([&]() { getRenderEngine().genTextures(1, &name); }));
+    return name;
 }
 
 void SurfaceFlinger::deleteTextureAsync(uint32_t texture) {
@@ -1536,6 +1578,24 @@ void SurfaceFlinger::onMessageReceived(int32_t what) {
                 }
             }
 
+            if (mDolphinFuncsEnabled) {
+                int maxQueuedFrames = 0;
+                mDrawingState.traverseInZOrder([&](Layer* layer) {
+                    if (layer->hasQueuedFrame() &&
+                            layer->shouldPresentNow(mPrimaryDispSync)) {
+                        int layerQueuedFrames = layer->getQueuedFrameCount();
+                        if (maxQueuedFrames < layerQueuedFrames &&
+                                !layer->visibleNonTransparentRegion.isEmpty()) {
+                            maxQueuedFrames = layerQueuedFrames;
+                        }
+                    }
+                });
+                if(mDolphinMonitor(maxQueuedFrames)) {
+                    signalLayerUpdate();
+                    break;
+                }
+            }
+
             // Now that we're going to make it to the handleMessageTransaction()
             // call below it's safe to call updateVrFlinger(), which will
             // potentially trigger a display handoff.
@@ -1548,6 +1608,9 @@ void SurfaceFlinger::onMessageReceived(int32_t what) {
                 // Signal a refresh if a transaction modified the window state,
                 // a new buffer was latched, or if HWC has requested a full
                 // repaint
+                if (mDolphinFuncsEnabled) {
+                    mDolphinRefresh();
+                }
                 signalRefresh();
             }
             break;
@@ -1872,6 +1935,17 @@ void SurfaceFlinger::postComposition(nsecs_t refreshStartTime)
         getBE().mTotalTime += elapsedTime;
     }
     getBE().mLastSwapTime = currentTime;
+
+    {
+        std::lock_guard lock(mTexturePoolMutex);
+        const size_t refillCount = mTexturePoolSize - mTexturePool.size();
+        if (refillCount > 0) {
+            const size_t offset = mTexturePool.size();
+            mTexturePool.resize(mTexturePoolSize);
+            getRenderEngine().genTextures(refillCount, mTexturePool.data() + offset);
+            ATRACE_INT("TexturePoolSize", mTexturePool.size());
+        }
+    }
 }
 
 void SurfaceFlinger::forceResyncModel() {
@@ -3724,10 +3798,13 @@ String8 SurfaceFlinger::getUniqueLayerName(const String8& name)
     // Tack on our counter whether there is a hit or not, so everyone gets a tag
     String8 uniqueName = name + "#" + String8(std::to_string(dupeCounter).c_str());
 
+    // Grab the state lock since we're accessing mCurrentState
+    Mutex::Autolock lock(mStateLock);
+
     // Loop over layers until we're sure there is no matching name
     while (matchFound) {
         matchFound = false;
-        mDrawingState.traverseInZOrder([&](Layer* layer) {
+        mCurrentState.traverseInZOrder([&](Layer* layer) {
             if (layer->getName() == uniqueName) {
                 matchFound = true;
                 uniqueName = name + "#" + String8(std::to_string(++dupeCounter).c_str());
