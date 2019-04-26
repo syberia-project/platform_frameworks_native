@@ -239,6 +239,7 @@ bool Layer::createHwcLayer(HWComposer* hwc, int32_t hwcId) {
     LayerBE::HWCInfo& hwcInfo = getBE().mHwcLayers[hwcId];
     hwcInfo.hwc = hwc;
     hwcInfo.layer = layer;
+    mLayerId = layer->getId();
     layer->setLayerDestroyedListener(
             [this, hwcId](HWC2::Layer* /*layer*/) { getBE().mHwcLayers.erase(hwcId); });
     return true;
@@ -498,9 +499,13 @@ FloatRect Layer::computeCrop(const sp<const DisplayDevice>& hw) const {
     return crop;
 }
 
-void Layer::setGeometry(const sp<const DisplayDevice>& displayDevice, uint32_t z)
-{
+void Layer::setGeometry(const sp<const DisplayDevice>& displayDevice, uint32_t z) {
     const auto hwcId = displayDevice->getHwcDisplayId();
+    if (!hasHwcLayer(hwcId)) {
+        ALOGE("[%s] failed to setGeometry: no HWC layer found (%d)",
+              mName.string(), hwcId);
+        return;
+    }
     auto& hwcInfo = getBE().mHwcLayers[hwcId];
 
     // enable this layer
@@ -2018,6 +2023,10 @@ void Layer::writeToProto(LayerProto* layerInfo, LayerVector::StateSet stateSet,
 }
 
 void Layer::writeToProto(LayerProto* layerInfo, int32_t hwcId) {
+    if (!hasHwcLayer(hwcId)) {
+        return;
+    }
+
     writeToProto(layerInfo, LayerVector::StateSet::Drawing);
 
     const auto& hwcInfo = getBE().mHwcLayers.at(hwcId);
