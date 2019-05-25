@@ -123,7 +123,6 @@ cc_defaults {
 cc_library_static {
     name: "libEGL_getProcAddress",
     defaults: ["egl_libs_defaults"],
-    sdclang: false,
     srcs: ["EGL/getProcAddress.cpp"],
     arch: {
         arm: {
@@ -135,7 +134,6 @@ cc_library_static {
 cc_library_static {
     name: "libEGL_blobCache",
     defaults: ["egl_libs_defaults"],
-    sdclang: false,
     srcs: [
         "EGL/BlobCache.cpp",
         "EGL/FileBlobCache.cpp",
@@ -146,7 +144,6 @@ cc_library_static {
 cc_library_shared {
     name: "libEGL",
     defaults: ["egl_libs_defaults"],
-    sdclang: false,
     srcs: [
         "EGL/egl_tls.cpp",
         "EGL/egl_cache.cpp",
@@ -200,7 +197,6 @@ cc_defaults {
 //
 cc_library_shared {
     name: "libGLESv1_CM",
-    sdclang: false,
     defaults: ["gles_libs_defaults"],
     srcs: ["GLES_CM/gl.cpp"],
     cflags: ["-DLOG_TAG=\"libGLESv1\""],
@@ -211,7 +207,6 @@ cc_library_shared {
 //
 cc_library_shared {
     name: "libGLESv2",
-    sdclang: false,
     defaults: ["gles_libs_defaults"],
     srcs: ["GLES2/gl2.cpp"],
     cflags: ["-DLOG_TAG=\"libGLESv2\""],
@@ -223,7 +218,6 @@ cc_library_shared {
 cc_library_shared {
     name: "libGLESv3",
     defaults: ["gles_libs_defaults"],
-    sdclang: false,
     srcs: ["GLES2/gl2.cpp"],
     cflags: ["-DLOG_TAG=\"libGLESv3\""],
 }
