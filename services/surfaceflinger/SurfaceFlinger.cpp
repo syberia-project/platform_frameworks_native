@@ -1090,12 +1090,9 @@ void SurfaceFlinger::setDesiredActiveConfig(const ActiveConfigInfo& info) {
         // Start receiving vsync samples now, so that we can detect a period
         // switch.
         mScheduler->resyncToHardwareVsync(true, getVsyncPeriod());
-        // We should only move to early offsets when we know that the refresh
-        // rate will change. Otherwise, we may be stuck in early offsets
-        // forever, as onRefreshRateChangeDetected will not be called.
-        if (mDesiredActiveConfig.event == Scheduler::ConfigEvent::Changed) {
-            mVsyncModulator.onRefreshRateChangeInitiated();
-        }
+        // As we called to set period, we will call to onRefreshRateChangeCompleted once
+        // DispSync model is locked.
+        mVsyncModulator.onRefreshRateChangeInitiated();
         mPhaseOffsets->setRefreshRateType(info.type);
         const auto [early, gl, late] = mPhaseOffsets->getCurrentOffsets();
         mVsyncModulator.setPhaseOffsets(early, gl, late);
@@ -1137,7 +1134,6 @@ void SurfaceFlinger::setActiveConfigInternal() {
 
     display->setActiveConfig(mUpcomingActiveConfig.configId);
 
-    mScheduler->resyncToHardwareVsync(true, getVsyncPeriod());
     mPhaseOffsets->setRefreshRateType(mUpcomingActiveConfig.type);
     const auto [early, gl, late] = mPhaseOffsets->getCurrentOffsets();
     mVsyncModulator.setPhaseOffsets(early, gl, late);
@@ -1147,6 +1143,18 @@ void SurfaceFlinger::setActiveConfigInternal() {
         mScheduler->onConfigChanged(mAppConnectionHandle, display->getId()->value,
                                     mUpcomingActiveConfig.configId);
     }
+}
+
+void SurfaceFlinger::desiredActiveConfigChangeDone() {
+    std::lock_guard<std::mutex> lock(mActiveConfigLock);
+    mDesiredActiveConfig.event = Scheduler::ConfigEvent::None;
+    mDesiredActiveConfigChanged = false;
+    ATRACE_INT("DesiredActiveConfigChanged", mDesiredActiveConfigChanged);
+
+    mScheduler->resyncToHardwareVsync(true, getVsyncPeriod());
+    mPhaseOffsets->setRefreshRateType(mUpcomingActiveConfig.type);
+    const auto [early, gl, late] = mPhaseOffsets->getCurrentOffsets();
+    mVsyncModulator.setPhaseOffsets(early, gl, late);
 }
 
 bool SurfaceFlinger::performSetActiveConfig() {
@@ -1178,14 +1186,7 @@ bool SurfaceFlinger::performSetActiveConfig() {
     if (!display || display->getActiveConfig() == desiredActiveConfig.configId) {
         // display is not valid or we are already in the requested mode
         // on both cases there is nothing left to do
-        std::lock_guard<std::mutex> lock(mActiveConfigLock);
-        mDesiredActiveConfig.event = Scheduler::ConfigEvent::None;
-        mDesiredActiveConfigChanged = false;
-        // Update scheduler with the correct vsync period as a no-op.
-        // Otherwise, there exists a race condition where we get stuck in the
-        // incorrect vsync period.
-        mScheduler->resyncToHardwareVsync(false, getVsyncPeriod());
-        ATRACE_INT("DesiredActiveConfigChanged", mDesiredActiveConfigChanged);
+        desiredActiveConfigChangeDone();
         return false;
     }
 
@@ -1193,15 +1194,7 @@ bool SurfaceFlinger::performSetActiveConfig() {
     // allowed configs might have change by the time we process the refresh.
     // Make sure the desired config is still allowed
     if (!isDisplayConfigAllowed(desiredActiveConfig.configId)) {
-        std::lock_guard<std::mutex> lock(mActiveConfigLock);
-        mDesiredActiveConfig.event = Scheduler::ConfigEvent::None;
-        mDesiredActiveConfig.configId = display->getActiveConfig();
-        mDesiredActiveConfigChanged = false;
-        // Update scheduler with the current vsync period as a no-op.
-        // Otherwise, there exists a race condition where we get stuck in the
-        // incorrect vsync period.
-        mScheduler->resyncToHardwareVsync(false, getVsyncPeriod());
-        ATRACE_INT("DesiredActiveConfigChanged", mDesiredActiveConfigChanged);
+        desiredActiveConfigChangeDone();
         return false;
     }
     mUpcomingActiveConfig = desiredActiveConfig;
