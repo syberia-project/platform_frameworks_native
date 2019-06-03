@@ -226,6 +226,7 @@ public:
     virtual ~Layer();
 
     void setPrimaryDisplayOnly() { mPrimaryDisplayOnly = true; }
+    bool isPrimaryDisplayOnly() { return mPrimaryDisplayOnly; }
 
     // ------------------------------------------------------------------------
     // Geometry setting functions.
@@ -342,6 +343,8 @@ public:
      */
     bool isSecure() const;
 
+    bool isSecureDisplay() const;
+
     /*
      * isVisible - true if this layer is visible, false otherwise
      */
@@ -369,7 +372,8 @@ public:
     bool isPendingRemoval() const { return mPendingRemoval; }
 
     void writeToProto(LayerProto* layerInfo,
-                      LayerVector::StateSet stateSet = LayerVector::StateSet::Drawing);
+                      LayerVector::StateSet stateSet = LayerVector::StateSet::Drawing,
+                      bool enableRegionDump = true);
 
     void writeToProto(LayerProto* layerInfo, int32_t hwcId);
 
@@ -427,6 +431,8 @@ public:
     // If a buffer was replaced this frame, release the former buffer
     virtual void releasePendingBuffer(nsecs_t /*dequeueReadyTime*/) { }
 
+
+    virtual bool isScreenshot() const { return false; }
 
     /*
      * draw - performs some global clipping optimizations
@@ -707,6 +713,7 @@ public:
     virtual void notifyAvailableFrames() {}
     virtual PixelFormat getPixelFormat() const { return PIXEL_FORMAT_NONE; }
     bool getPremultipledAlpha() const;
+    uint64_t getLayerId() {return mLayerId; }
 
 protected:
     // -----------------------------------------------------------------------
@@ -790,6 +797,8 @@ protected:
     wp<Layer> mDrawingParent;
 
     mutable LayerBE mBE;
+
+    uint64_t mLayerId;
 
 private:
     /**
