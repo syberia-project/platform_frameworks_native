@@ -224,7 +224,6 @@ DisplayDevice::DisplayDevice(
         std::unique_ptr<RE::Surface> renderSurface,
         int displayWidth,
         int displayHeight,
-        int displayInstallOrientation,
         bool hasWideColorGamut,
         const HdrCapabilities& hdrCapabilities,
         const int32_t supportedPerFrameMetadata,
@@ -240,7 +239,6 @@ DisplayDevice::DisplayDevice(
       mSurface{std::move(renderSurface)},
       mDisplayWidth(displayWidth),
       mDisplayHeight(displayHeight),
-      mDisplayInstallOrientation(displayInstallOrientation),
       mPageFlipCount(0),
       mIsSecure(isSecure),
       mLayerStack(NO_LAYER_STACK),
@@ -618,8 +616,9 @@ void DisplayDevice::setProjection(int orientation,
     // need to take care of primary display rotation for mGlobalTransform
     // for case if the panel is not installed aligned with device orientation
     if (mType == DisplayType::DISPLAY_PRIMARY) {
+        int primaryDisplayOrientation = mFlinger->getPrimaryDisplayOrientation();
         DisplayDevice::orientationToTransfrom(
-                (orientation + mDisplayInstallOrientation) % (DisplayState::eOrientation270 + 1),
+                (orientation + primaryDisplayOrientation) % (DisplayState::eOrientation270 + 1),
                 w, h, &R);
     }
 
