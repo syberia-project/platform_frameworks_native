@@ -1731,7 +1731,16 @@ void SurfaceFlinger::onRefreshReceived(int sequenceId, hwc2_display_t /*hwcDispl
 
 void SurfaceFlinger::setVsyncEnabled(bool enabled) {
     ATRACE_CALL();
-    Mutex::Autolock lock(mStateLock);
+
+    // Enable / Disable HWVsync from the main thread to avoid race conditions with
+    // display power state.
+    postMessageAsync(new LambdaMessage(
+            [=]() NO_THREAD_SAFETY_ANALYSIS { setVsyncEnabledInternal(enabled); }));
+}
+
+void SurfaceFlinger::setVsyncEnabledInternal(bool enabled) {
+    ATRACE_CALL();
+
     auto displayId = getInternalDisplayIdLocked();
     if (mNextVsyncSource) {
         // Disable current vsync source before enabling the next source
@@ -1743,8 +1752,14 @@ void SurfaceFlinger::setVsyncEnabled(bool enabled) {
     } else if (mActiveVsyncSource) {
         displayId = mActiveVsyncSource->getId();
     }
-    getHwComposer().setVsyncEnabled(*displayId,
-        enabled ? HWC2::Vsync::Enable : HWC2::Vsync::Disable);
+        sp<DisplayDevice> display = getDefaultDisplayDeviceLocked();
+        if (display && display->isPoweredOn()) {
+            getHwComposer().setVsyncEnabled(*displayId,
+                                            enabled ? HWC2::Vsync::Enable : HWC2::Vsync::Disable);
+        } else {
+            // Cache the latest vsync state and apply it when screen is on again
+            mEnableHWVsyncScreenOn = enabled;
+        }
     if (mNextVsyncSource) {
         mActiveVsyncSource = mNextVsyncSource;
         mNextVsyncSource = NULL;
@@ -5009,6 +5024,10 @@ void SurfaceFlinger::setPowerModeInternal(const sp<DisplayDevice>& display, int 
     if (currentMode == HWC_POWER_MODE_OFF) {
         // Turn on the display
         getHwComposer().setPowerMode(*displayId, mode);
+        if (mEnableHWVsyncScreenOn) {
+            setPrimaryVsyncEnabledInternal(mEnableHWVsyncScreenOn);
+            mEnableHWVsyncScreenOn = false;
+        }
         if (isDummyDisplay) {
             if (display->isPrimary() && mode != HWC_POWER_MODE_DOZE_SUSPEND) {
                 mScheduler->onScreenAcquired(mAppConnectionHandle);
