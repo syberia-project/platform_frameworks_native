@@ -312,10 +312,11 @@ public:
     // TODO: this should be made accessible only to MessageQueue
     void onMessageReceived(int32_t what);
 
-    // Returns the expected present time for this frame.
+    // populates the expected present time for this frame.
     // When we are in negative offsets, we perform a correction so that the
     // predicted vsync for the *next* frame is used instead.
-    nsecs_t getExpectedPresentTime();
+    void populateExpectedPresentTime();
+    nsecs_t getExpectedPresentTime() const { return mExpectedPresentTime; }
 
     // for debugging only
     // TODO: this should be made accessible only to HWComposer
@@ -1245,6 +1246,8 @@ private:
     // The Layer pointer is removed from the set when the destructor is called so there shouldn't
     // be any issues with a raw pointer referencing an invalid object.
     std::unordered_set<Layer*> mOffscreenLayers;
+
+    nsecs_t mExpectedPresentTime;
 
 public:
     nsecs_t mVsyncTimeStamp = -1;
