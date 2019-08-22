@@ -172,7 +172,14 @@ cc_library_shared {
                     "ExSurfaceFlinger/ExBufferLayer.cpp"
                 ],
             },
-            uses_qcom_um_3_18_family: {
+            uses_qcom_um_3_4_family: {
+                header_libs: [
+                    "//vendor/qcom/opensource/display-commonsys-intf",
+                ],
+                shared_libs: [
+                    "//hardware/qcom/display-caf/msm8974:libqdMetaData.system",
+                ],
+            },            uses_qcom_um_3_18_family: {
                 header_libs: [
                     "//hardware/qcom/display-caf/msm8996:display_intf_headers",
                 ],
