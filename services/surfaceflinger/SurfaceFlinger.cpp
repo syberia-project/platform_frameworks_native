@@ -363,6 +363,11 @@ SurfaceFlinger::SurfaceFlinger(Factory& factory) : SurfaceFlinger(factory, SkipI
     mPropagateBackpressure = !atoi(value);
     ALOGI_IF(!mPropagateBackpressure, "Disabling backpressure propagation");
 
+    property_get("debug.sf.enable_gl_backpressure", value, "0");
+    mPropagateBackpressureClientComposition = atoi(value);
+    ALOGI_IF(mPropagateBackpressureClientComposition,
+             "Enabling backpressure propagation for Client Composition");
+
     property_get("debug.sf.enable_hwc_vds", value, "0");
     mUseHwcVirtualDisplays = atoi(value);
     ALOGI_IF(mUseHwcVirtualDisplays, "Enabling HWC virtual displays");
@@ -770,8 +775,10 @@ void SurfaceFlinger::init() {
         return getVsyncPeriod();
     });
 
+    int active_config = getHwComposer().getActiveConfigIndex(*display->getId());
+    mRefreshRateConfigs.setActiveConfig(active_config);
     mRefreshRateConfigs.populate(getHwComposer().getConfigs(*display->getId()));
-    mRefreshRateStats.setConfigMode(getHwComposer().getActiveConfigIndex(*display->getId()));
+    mRefreshRateStats.setConfigMode(active_config);
 
     if (mUseSmoMo) {
         mSmoMoLibHandle = dlopen("libsmomo.qti.so", RTLD_NOW);
@@ -1047,6 +1054,13 @@ status_t SurfaceFlinger::setActiveConfig(const sp<IBinder>& displayToken, int mo
 
     std::vector<int32_t> allowedConfig;
     allowedConfig.push_back(mode);
+
+    const auto display = getDisplayDeviceLocked(displayToken);
+    // RefreshRateConfigs are only supported on Primary display.
+    if (display && display->isPrimary()) {
+        mRefreshRateConfigs.setActiveConfig(mode);
+        mRefreshRateConfigs.populate(getHwComposer().getConfigs(*display->getId()));
+    }
 
     return setAllowedDisplayConfigs(displayToken, allowedConfig);
 }
@@ -1814,9 +1828,9 @@ void SurfaceFlinger::onMessageReceived(int32_t what) NO_THREAD_SAFETY_ANALYSIS {
                 break;
             }
 
-            // For now, only propagate backpressure when missing a hwc frame.
-            if (hwcFrameMissed && !gpuFrameMissed) {
-                if (mPropagateBackpressure) {
+            if (frameMissed && mPropagateBackpressure) {
+                if ((hwcFrameMissed && !gpuFrameMissed) ||
+                    mPropagateBackpressureClientComposition) {
                     signalLayerUpdate();
                     break;
                 }
@@ -4886,8 +4900,6 @@ void SurfaceFlinger::setPowerModeOnMainThread(const sp<IBinder>& displayToken, i
 
 void SurfaceFlinger::setPowerMode(const sp<IBinder>& displayToken, int mode) {
     sp<DisplayDevice> display(getDisplayDevice(displayToken));
-    const auto displayId = display->getId();
-    const auto hwcDisplayId = getHwComposer().fromPhysicalDisplayId(*displayId);
 
     if (!display) {
         ALOGE("Attempt to set power mode %d for invalid display token %p", mode,
@@ -4897,6 +4909,9 @@ void SurfaceFlinger::setPowerMode(const sp<IBinder>& displayToken, int mode) {
         ALOGW("Attempt to set power mode %d for virtual display", mode);
         return;
     }
+
+    const auto displayId = display->getId();
+    const auto hwcDisplayId = getHwComposer().fromPhysicalDisplayId(*displayId);
 
     // Fallback to default power state behavior as HWC does not support power mode override.
     using vendor::display::config::V1_7::IDisplayConfig;
@@ -5081,6 +5096,13 @@ void SurfaceFlinger::dumpMemoryAllocations(bool dump)
 {
     if (!dump) {
         return;
+    }
+
+    {
+       Mutex::Autolock lock(mLayerCountLock);
+       if (mNumLayers < 50) {
+           return;
+       }
     }
     std::string dumpsys;
     GraphicBufferAllocator& alloc(GraphicBufferAllocator::get());
@@ -6174,6 +6196,12 @@ status_t SurfaceFlinger::onTransact(uint32_t code, const Parcel& data, Parcel* r
                 mDebugDisplayConfigSetByBackdoor = false;
                 if (n >= 0) {
                     const auto displayToken = getInternalDisplayToken();
+                    const auto display = getDisplayDeviceLocked(displayToken);
+                    // RefreshRateConfigs are only supported on Primary display.
+                    if (display && display->isPrimary()) {
+                        mRefreshRateConfigs.setActiveConfig(n);
+                        mRefreshRateConfigs.populate(getHwComposer().getConfigs(*display->getId()));
+                    }
                     status_t result = setAllowedDisplayConfigs(displayToken, {n});
                     if (result != NO_ERROR) {
                         return result;
