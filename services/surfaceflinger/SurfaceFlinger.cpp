@@ -7138,6 +7138,12 @@ void SurfaceFlinger::setAllowedDisplayConfigsInternal(const sp<DisplayDevice>& d
     mScheduler->onConfigChanged(mAppConnectionHandle, display->getId()->value,
                                 display->getActiveConfig());
 
+    // TODO(b/140204874): This hack triggers a notification that something has changed, so
+    // that listeners that care about a change in allowed configs can get the notification.
+    // Giving current ActiveConfig so that most other listeners would just drop the event
+    mScheduler->onConfigChanged(mAppConnectionHandle, display->getId()->value,
+                                display->getActiveConfig());
+
     setPreferredDisplayConfig();
 }
 
