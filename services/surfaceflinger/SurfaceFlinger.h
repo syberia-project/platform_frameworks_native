@@ -76,8 +76,20 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
+#include <list>
 
 using namespace android::surfaceflinger;
+
+namespace smomo {
+class SmomoIntf;
+} // namespace smomo
+
+using smomo::SmomoIntf;
+
+namespace composer {
+class FrameExtnIntf;
+}
+using composer::FrameExtnIntf;
 
 namespace android {
 
@@ -232,6 +244,8 @@ public:
 
     static bool useContextPriority;
 
+    static bool sDirectStreaming;
+
     // The data space and pixel format that SurfaceFlinger expects hardware composer
     // to composite efficiently. Meaning under most scenarios, hardware composer
     // will accept layers with the data space and pixel format.
@@ -291,7 +305,7 @@ public:
 
     // enable/disable h/w composer event
     // TODO: this should be made accessible only to EventThread
-    void setPrimaryVsyncEnabled(bool enabled);
+    void setVsyncEnabled(bool enabled);
 
     // called on the main thread by MessageQueue when an internal message
     // is received
@@ -307,10 +321,18 @@ public:
     bool authenticateSurfaceTextureLocked(
         const sp<IGraphicBufferProducer>& bufferProducer) const;
 
-    inline void onLayerCreated() { mNumLayers++; }
+    inline void onLayerCreated() {
+         {
+           Mutex::Autolock lock(mLayerCountLock);
+           mNumLayers++;
+         }
+    }
     inline void onLayerDestroyed(Layer* layer) {
-        mNumLayers--;
-        mOffscreenLayers.erase(layer);
+          {
+            Mutex::Autolock lock(mLayerCountLock);
+            mNumLayers--;
+          }
+          mOffscreenLayers.erase(layer);
     }
 
     TransactionCompletedThread& getTransactionCompletedThread() {
@@ -480,6 +502,10 @@ private:
     void onHotplugReceived(int32_t sequenceId, hwc2_display_t hwcDisplayId,
                            HWC2::Connection connection) override;
     void onRefreshReceived(int32_t sequenceId, hwc2_display_t hwcDisplayId) override;
+    // For Async power mode
+    void setPowerModeOnMainThread(const sp<IBinder>& displayToken, int mode);
+    // For Animation Hint
+    void setDisplayAnimating(const sp<DisplayDevice>& hw);
 
     /* ------------------------------------------------------------------------
      * Message handling
@@ -647,6 +673,9 @@ private:
     void traverseLayersInDisplay(const sp<const DisplayDevice>& display,
                                  const LayerVector::Visitor& visitor);
 
+    bool canAllocateHwcDisplayIdForVDS(uint64_t usage);
+    bool skipColorLayer(const char* layerType);
+
     sp<StartPropertySetThread> mStartPropertySetThread;
 
     /* ------------------------------------------------------------------------
@@ -735,6 +764,8 @@ private:
     void computeVisibleRegions(const sp<const DisplayDevice>& display, Region& dirtyRegion,
                                Region& opaqueRegion);
 
+    sp<DisplayDevice> getVsyncSource();
+    void updateVsyncSource();
     void preComposition();
     void postComposition();
     void getCompositorTiming(CompositorTiming* compositorTiming);
@@ -801,6 +832,7 @@ private:
     // Sets the refresh rate by switching active configs, if they are available for
     // the desired refresh rate.
     void setRefreshRateTo(RefreshRateType, Scheduler::ConfigEvent event) REQUIRES(mStateLock);
+    void setRefreshRateTo(int32_t refreshRate) REQUIRES(mStateLock);
 
     bool isDisplayConfigAllowed(int32_t configId) REQUIRES(mStateLock);
 
@@ -896,9 +928,34 @@ private:
 
     status_t dumpCritical(int fd, const DumpArgs&, bool asProto);
 
+    status_t doDumpContinuous(int fd, const DumpArgs& args);
+    void dumpDrawCycle(bool prePrepare);
+    struct {
+      Mutex lock;
+      const char *name = "/data/misc/wmtrace/dumpsys.txt";
+      bool running = false;
+      bool noLimit = false;
+      bool replaceAfterCommit = false;
+      long int position = 0;
+    } mFileDump;
+
+    void dumpMemoryAllocations(bool dump);
+    struct {
+      const char *mMemoryAllocFileName = "/data/misc/wmtrace/sf_memory.txt";
+      int mMaxAllocationLimit = 1024*1024;
+      int mMemoryAllocFilePos = 0;
+    } mMemoryDump;
+
     status_t dumpAll(int fd, const DumpArgs& args, bool asProto) override {
         return doDump(fd, args, asProto);
     }
+
+    // debug open file counit by process
+    struct {
+      const char *debugCountOpenFiles = "/data/misc/wmtrace/sfopenfiles.txt";
+      int lastFdcount = 2048;
+    } mFileOpen;
+    void printOpenFds();
 
     /* ------------------------------------------------------------------------
      * VrFlinger
@@ -918,6 +975,9 @@ private:
 
     // access must be protected by mStateLock
     mutable Mutex mStateLock;
+    mutable Mutex mDolphinStateLock;
+    mutable Mutex mLayerCountLock;
+    mutable Mutex mVsyncLock;
     State mCurrentState{LayerVector::StateSet::Current};
     std::atomic<int32_t> mTransactionFlags = 0;
     Condition mTransactionCV;
@@ -998,6 +1058,7 @@ private:
 
     // don't use a lock for these, we don't care
     int mDebugRegion = 0;
+    bool mVsyncSourceReliableOnDoze = false;
     bool mDebugDisableHWC = false;
     bool mDebugDisableTransformHint = false;
     volatile nsecs_t mDebugInTransaction = 0;
@@ -1080,6 +1141,10 @@ private:
     bool mHasPoweredOff = false;
 
     size_t mNumLayers = 0;
+    // Vsync Source
+    sp<DisplayDevice> mActiveVsyncSource = NULL;
+    sp<DisplayDevice> mNextVsyncSource = NULL;
+    std::list<sp<DisplayDevice>> mDisplaysList;
 
     // Verify that transaction is being called by an approved process:
     // either AID_GRAPHICS or AID_SYSTEM.
@@ -1167,6 +1232,35 @@ private:
     // The Layer pointer is removed from the set when the destructor is called so there shouldn't
     // be any issues with a raw pointer referencing an invalid object.
     std::unordered_set<Layer*> mOffscreenLayers;
+
+public:
+    nsecs_t mVsyncTimeStamp = -1;
+    nsecs_t mRefreshTimeStamp = -1;
+    String8 mNameLayerMax;
+    int mMaxQueuedFrames = -1;
+    int mNumIdle = -1;
+
+private:
+    bool mDolphinFuncsEnabled = false;
+    void *mDolphinHandle = nullptr;
+    bool (*mDolphinInit)() = nullptr;
+    bool (*mDolphinMonitor)(int number, nsecs_t vsyncPeriod) = nullptr;
+    void (*mDolphinScaling)(int numIdle, int maxQueuedFrames) = nullptr;
+    void (*mDolphinRefresh)() = nullptr;
+
+    bool mUseSmoMo = false;
+    SmomoIntf* mSmoMo = nullptr;
+    void *mSmoMoLibHandle = nullptr;
+
+    using CreateSmoMoFuncPtr = std::add_pointer<SmomoIntf*()>::type;
+    using DestroySmoMoFuncPtr = std::add_pointer<void(SmomoIntf*)>::type;
+    CreateSmoMoFuncPtr mSmoMoCreateFunc;
+    DestroySmoMoFuncPtr mSmoMoDestroyFunc;
+
+    FrameExtnIntf* mFrameExtn = nullptr;
+    void *mFrameExtnLibHandle = nullptr;
+    bool (*mCreateFrameExtnFunc)(FrameExtnIntf **interface) = nullptr;
+    bool (*mDestroyFrameExtnFunc)(FrameExtnIntf *interface) = nullptr;
 };
 
 } // namespace android

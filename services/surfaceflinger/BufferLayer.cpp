@@ -66,6 +66,8 @@ BufferLayer::BufferLayer(const LayerCreationArgs& args)
 
     mPotentialCursor = args.flags & ISurfaceComposerClient::eCursorWindow;
     mProtectedByApp = args.flags & ISurfaceComposerClient::eProtectedByApp;
+
+    mScreenshot = (std::string(args.name).find("ScreenshotSurface") != std::string::npos);
 }
 
 BufferLayer::~BufferLayer() {
@@ -587,6 +589,7 @@ bool BufferLayer::latchUnsignaledBuffers() {
         latch = atoi(value);
         propertyLoaded = true;
     }
+
     return latch;
 }
 

@@ -398,6 +398,11 @@ public:
     bool isSecure() const;
 
     /*
+     * isSecureDisplay - true if this display is secure, false otherwise
+     */
+    bool isSecureDisplay() const;
+
+    /*
      * isVisible - true if this layer is visible, false otherwise
      */
     virtual bool isVisible() const = 0;
@@ -516,6 +521,9 @@ public:
 
     // If a buffer was replaced this frame, release the former buffer
     virtual void releasePendingBuffer(nsecs_t /*dequeueReadyTime*/) { }
+
+    // For Animation Hint
+    virtual bool isScreenshot() const { return false; }
 
     /*
      * prepareClientLayer - populates a renderengine::LayerSettings to passed to
