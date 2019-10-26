@@ -1732,7 +1732,6 @@ void SurfaceFlinger::onRefreshReceived(int sequenceId, hwc2_display_t /*hwcDispl
 void SurfaceFlinger::setVsyncEnabled(bool enabled) {
     ATRACE_CALL();
     Mutex::Autolock lock(mStateLock);
-    Mutex::Autolock lockVsync(mVsyncLock);
     auto displayId = getInternalDisplayIdLocked();
     if (mNextVsyncSource) {
         // Disable current vsync source before enabling the next source
@@ -2666,9 +2665,7 @@ sp<DisplayDevice> SurfaceFlinger::getVsyncSource() {
 
 void SurfaceFlinger::updateVsyncSource()
             NO_THREAD_SAFETY_ANALYSIS {
-    Mutex::Autolock lock(mVsyncLock);
     nsecs_t vsync = getVsyncPeriod();
-    mNextVsyncSource = getVsyncSource();
 
     if (mNextVsyncSource == NULL) {
         // Switch off vsync for the last enabled source
@@ -2992,6 +2989,7 @@ void SurfaceFlinger::processDisplayHotplugEventsLocked() {
                 mCurrentState.displays.removeItemsAt(index);
             }
             mDisplaysList.remove(getDisplayDeviceLocked(mPhysicalDisplayTokens[info->id]));
+            mNextVsyncSource = getVsyncSource();
             updateVsyncSource();
             mPhysicalDisplayTokens.erase(info->id);
         }
@@ -4996,6 +4994,8 @@ void SurfaceFlinger::setPowerModeInternal(const sp<DisplayDevice>& display, int 
     mActiveVsyncSource = getVsyncSource();
 
     display->setPowerMode(mode);
+
+    mNextVsyncSource = getVsyncSource();
 
     // Dummy display created by LibSurfaceFlinger unit test
     // for setPowerModeInternal test cases.
