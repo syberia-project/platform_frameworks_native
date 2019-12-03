@@ -1629,6 +1629,11 @@ void SurfaceFlinger::onVsyncReceived(int32_t sequenceId, hwc2_display_t hwcDispl
         return;
     }
 
+    if (hwcDisplayId != getHwComposer().getInternalHwcDisplayId()) {
+        // For now, we don't do anything with external display vsyncs.
+        return;
+    }
+
     bool periodFlushed = false;
     mScheduler->addResyncSample(timestamp, &periodFlushed);
     if (periodFlushed) {
@@ -5106,6 +5111,9 @@ void SurfaceFlinger::setPowerModeInternal(const sp<DisplayDevice>& display, int 
         // Make sure HWVsync is disabled before turning off the display
         setVsyncEnabledInHWC(*displayId, HWC2::Vsync::Disable);
 
+        // Make sure HWVsync is disabled before turning off the display
+        setVsyncEnabledInHWC(*displayId, HWC2::Vsync::Disable);
+
         getHwComposer().setPowerMode(*displayId, mode);
         mVisibleRegionsDirty = true;
         // from this point on, SF will stop drawing on this display
@@ -7148,12 +7156,6 @@ void SurfaceFlinger::setAllowedDisplayConfigsInternal(const sp<DisplayDevice>& d
 
     ALOGV("Updating allowed configs");
     mAllowedDisplayConfigs = std::move(allowedDisplayConfigs);
-
-    // TODO(b/140204874): This hack triggers a notification that something has changed, so
-    // that listeners that care about a change in allowed configs can get the notification.
-    // Giving current ActiveConfig so that most other listeners would just drop the event
-    mScheduler->onConfigChanged(mAppConnectionHandle, display->getId()->value,
-                                display->getActiveConfig());
 
     // TODO(b/140204874): This hack triggers a notification that something has changed, so
     // that listeners that care about a change in allowed configs can get the notification.
