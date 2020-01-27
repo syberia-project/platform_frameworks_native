@@ -1009,6 +1009,8 @@ private:
     } mFileOpen;
     void printOpenFds();
 
+    bool requiresProtecedContext(const sp<DisplayDevice>& displayDevice);
+
     /* ------------------------------------------------------------------------
      * VrFlinger
      */
