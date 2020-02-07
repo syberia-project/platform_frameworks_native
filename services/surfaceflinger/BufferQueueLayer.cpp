@@ -486,6 +486,7 @@ void BufferQueueLayer::onFrameAvailable(const BufferItem& item) {
             status_t result = mQueueItemCondition.waitRelative(mQueueItemLock, ms2ns(500));
             if (result != NO_ERROR) {
                 ALOGE("[%s] Timed out waiting on callback", mName.string());
+                break;
             }
         }
 
@@ -561,6 +562,7 @@ void BufferQueueLayer::onFrameReplaced(const BufferItem& item) {
             status_t result = mQueueItemCondition.waitRelative(mQueueItemLock, ms2ns(500));
             if (result != NO_ERROR) {
                 ALOGE("[%s] Timed out waiting on callback", mName.string());
+                break;
             }
         }
 
