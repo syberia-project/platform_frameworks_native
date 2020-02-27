@@ -54,6 +54,8 @@
 #include "TransactionCompletedThread.h"
 #include <android/hardware/graphics/common/1.0/types.h>
 
+#include <android/hardware/graphics/common/1.0/types.h>
+
 using namespace android::surfaceflinger;
 
 namespace android {
@@ -228,6 +230,8 @@ public:
 
     void setDequeueLatency(const nsecs_t latency) { mDequeueLatency = latency; }
     nsecs_t getDequeueLatency() const { return mDequeueLatency; }
+
+    uint32_t getLayerType() const { return mLayerType; }
 
     // ------------------------------------------------------------------------
     // Geometry setting functions.
@@ -869,6 +873,8 @@ protected:
 
     // latest buffer dequeue latency
     std::atomic<nsecs_t> mDequeueLatency{0};
+
+    uint32_t mLayerType{0};
 
     // main thread
     sp<NativeHandle> mSidebandStream;

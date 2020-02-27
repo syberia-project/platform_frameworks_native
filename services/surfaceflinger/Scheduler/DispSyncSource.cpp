@@ -148,3 +148,4 @@ void DispSyncSource::tracePhaseOffset() {
 }
 
 } // namespace android
+

@@ -270,7 +270,8 @@ Rect Layer::getContentCrop() const {
         crop = mCurrentCrop;
     } else if (mActiveBuffer != nullptr) {
         // otherwise we use the whole buffer
-        crop = mActiveBuffer->getBounds();
+        sp<GraphicBuffer> buf = mActiveBuffer;
+        crop = buf->getBounds();
     } else {
         // if we don't have a buffer yet, we use an empty/invalid crop
         crop.makeInvalid();
