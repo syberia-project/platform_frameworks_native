@@ -87,8 +87,11 @@ class SmomoIntf;
 using smomo::SmomoIntf;
 
 namespace composer {
+class ComposerExtnIntf;
+class ComposerExtnLib;
 class FrameExtnIntf;
 class LayerExtnIntf;
+class FrameSchedulerIntf;
 } // namespace composer
 
 using composer::FrameExtnIntf;
@@ -611,6 +614,7 @@ private:
     void commitInputWindowCommands() REQUIRES(mStateLock);
     void setInputWindowsFinished();
     void updateCursorAsync();
+    void updateFrameScheduler();
 
     /* handlePageFlip - latch a new buffer if available and compute the dirty
      * region. Returns whether a new buffer has been latched, i.e., whether it
@@ -1306,6 +1310,9 @@ public:
     int mNumIdle = -1;
 
 private:
+    composer::ComposerExtnIntf *mComposerExtnIntf = nullptr;
+    composer::FrameSchedulerIntf *mFrameSchedulerExtnIntf = nullptr;
+
     bool mDolphinFuncsEnabled = false;
     void *mDolphinHandle = nullptr;
     bool (*mDolphinInit)() = nullptr;
