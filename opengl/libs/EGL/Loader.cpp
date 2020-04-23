@@ -262,13 +262,6 @@ void* Loader::open(egl_connection_t* cnx)
 
     setEmulatorGlesValue();
 
-    // Check if we should use ANGLE early, so loading each driver doesn't require repeated queries.
-    if (android::GraphicsEnv::getInstance().shouldUseAngle()) {
-        cnx->shouldUseAngle = true;
-    } else {
-        cnx->shouldUseAngle = false;
-    }
-
     // Firstly, try to load ANGLE driver.
     driver_t* hnd = attempt_to_load_angle(cnx);
     if (!hnd) {
@@ -352,7 +345,6 @@ void Loader::close(egl_connection_t* cnx)
     delete hnd;
     cnx->dso = nullptr;
 
-    cnx->shouldUseAngle = false;
     cnx->useAngle = false;
 
     if (cnx->vendorEGL) {
@@ -546,14 +538,7 @@ static void* load_angle_from_namespace(const char* kind, android_namespace_t* ns
 }
 
 static void* load_angle(const char* kind, android_namespace_t* ns, egl_connection_t* cnx) {
-    void* so = nullptr;
-
-    if ((cnx->shouldUseAngle) || android::GraphicsEnv::getInstance().shouldUseAngle()) {
-        so = load_angle_from_namespace(kind, ns);
-        cnx->shouldUseAngle = true;
-    } else {
-        cnx->shouldUseAngle = false;
-    }
+    void* so = load_angle_from_namespace(kind, ns);
 
     if (so) {
         ALOGV("Loaded ANGLE %s library for '%s' (instead of native)", kind,
@@ -630,6 +615,11 @@ static void* load_updated_driver(const char* kind, android_namespace_t* ns) {
 
 Loader::driver_t* Loader::attempt_to_load_angle(egl_connection_t* cnx) {
     ATRACE_CALL();
+
+    if (!android::GraphicsEnv::getInstance().shouldUseAngle()) {
+        return nullptr;
+    }
+
     android_namespace_t* ns = android::GraphicsEnv::getInstance().getAngleNamespace();
     if (!ns) {
         return nullptr;
