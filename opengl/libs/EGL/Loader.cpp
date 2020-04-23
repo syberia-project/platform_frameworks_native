@@ -353,7 +353,6 @@ void Loader::close(egl_connection_t* cnx)
     cnx->dso = nullptr;
 
     cnx->shouldUseAngle = false;
-    cnx->angleDecided = false;
     cnx->useAngle = false;
 
     if (cnx->vendorEGL) {
@@ -604,7 +603,6 @@ static void* load_angle(const char* kind, android_namespace_t* ns, egl_connectio
             android::GraphicsEnv::getInstance().getAngleAppName().c_str());
         cnx->useAngle = false;
     }
-    cnx->angleDecided = true;
 
     return so;
 }
