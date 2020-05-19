@@ -1504,7 +1504,7 @@ status_t SurfaceFlinger::setDisplayElapseTime(const sp<DisplayDevice>& display) 
         return OK;
     }
 
-    if (mDisplaysList.size() != 1) {
+    if (mDisplaysList.size() != 1 || display->isVirtual()) {
         // Revisit this for multi displays.
         return OK;
     }
@@ -4332,6 +4332,12 @@ bool SurfaceFlinger::requiresProtecedContext(const sp<DisplayDevice>& displayDev
     auto& renderEngine = getRenderEngine();
     auto display = displayDevice->getCompositionDisplay();
     if (displayDevice->getId()) {
+        // For display sinks which are not secure, avoid protected
+        // content support in SurfaceFlinger
+        if (!display->isSecure()) {
+            return false;
+        }
+
         for (auto& layer : displayDevice->getVisibleLayersSortedByZ()) {
             // If the layer is a protected layer, mark protected context is needed.
             if (layer->isProtected()) {
