@@ -54,14 +54,20 @@ public:
     static  status_t            getProcessFreezeInfo(pid_t pid, bool *sync_received,
                                                     bool *async_received);
             sp<ProcessState>    process();
-            
+
             status_t            clearLastError();
 
             pid_t               getCallingPid() const;
-            // nullptr if unavailable
-            //
-            // this can't be restored once it's cleared, and it does not return the
-            // context of the current process when not in a binder call.
+
+            /**
+             * Returns the SELinux security identifier of the process which has
+             * made the current binder call. If not in a binder call this will
+             * return nullptr. If this isn't requested with
+             * Binder::setRequestingSid, it will also return nullptr.
+             *
+             * This can't be restored once it's cleared, and it does not return the
+             * context of the current process when not in a binder call.
+             */
             const char*         getCallingSid() const;
             uid_t               getCallingUid() const;
 
