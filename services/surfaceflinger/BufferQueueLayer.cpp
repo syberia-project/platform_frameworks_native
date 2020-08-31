@@ -617,7 +617,7 @@ void BufferQueueLayer::onFirstRef() {
         updateTransformHint(display);
     }
 
-    if (mFlinger->mLayerExt) {
+    if (mFlinger->mUseLayerExt && mFlinger->mLayerExt) {
         mLayerType = mFlinger->mLayerExt->getLayerClass(mName.string());
     }
 }
