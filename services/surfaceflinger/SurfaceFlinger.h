@@ -92,7 +92,6 @@ class ComposerExtnLib;
 class FrameExtnIntf;
 class LayerExtnIntf;
 class FrameSchedulerIntf;
-class DisplayExtnIntf;
 } // namespace composer
 
 using composer::FrameExtnIntf;
@@ -1314,7 +1313,6 @@ public:
 private:
     composer::ComposerExtnIntf *mComposerExtnIntf = nullptr;
     composer::FrameSchedulerIntf *mFrameSchedulerExtnIntf = nullptr;
-    composer::DisplayExtnIntf *mDisplayExtnIntf = nullptr;
 
     bool mDolphinFuncsEnabled = false;
     void *mDolphinHandle = nullptr;
