@@ -14,8 +14,7 @@
  * limitations under the License.
  */
 
-#ifndef ANDROID_PARCEL_FILE_DESCRIPTOR_H_
-#define ANDROID_PARCEL_FILE_DESCRIPTOR_H_
+#pragma once
 
 #include <android-base/unique_fd.h>
 #include <binder/Parcel.h>
@@ -66,5 +65,3 @@ private:
 
 } // namespace os
 } // namespace android
-
-#endif // ANDROID_OS_PARCEL_FILE_DESCRIPTOR_H_

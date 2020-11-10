@@ -14,8 +14,7 @@
  * limitations under the License.
  */
 
-#ifndef ANDROID_PARCELABLE_H
-#define ANDROID_PARCELABLE_H
+#pragma once
 
 #include <vector>
 
@@ -59,5 +58,3 @@ public:
 #endif
 
 }  // namespace android
-
-#endif // ANDROID_PARCELABLE_H
