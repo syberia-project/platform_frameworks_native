@@ -109,7 +109,7 @@ public:
             void                blockUntilThreadAvailable();
 
             // Service manager registration
-            void                setTheContextObject(sp<BBinder> obj);
+            void                setTheContextObject(const sp<BBinder>& obj);
 
             // WARNING: DO NOT USE THIS API
             //
