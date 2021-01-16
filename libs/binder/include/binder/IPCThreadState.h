@@ -149,6 +149,11 @@ public:
             // side.
             static const int32_t kUnsetWorkSource = -1;
 
+            // Create a temp reference until commands in queue flushed to driver
+            // Internal only.
+            // @internal
+            void                 createTransactionReference(RefBase* ref);
+
 private:
                                 IPCThreadState();
                                 ~IPCThreadState();
