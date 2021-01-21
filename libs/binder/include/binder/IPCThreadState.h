@@ -173,8 +173,9 @@ private:
     static  void                threadDestructor(void *st);
     static  void                freeBuffer(Parcel* parcel,
                                            const uint8_t* data, size_t dataSize,
-                                           const binder_size_t* objects, size_t objectsSize);
-
+                                           const binder_size_t* objects, size_t objectsSize,
+                                           void* cookie);
+    
     const   sp<ProcessState>    mProcess;
             Vector<BBinder*>    mPendingStrongDerefs;
             Vector<RefBase::weakref_type*> mPendingWeakDerefs;
