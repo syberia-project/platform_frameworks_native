@@ -161,7 +161,10 @@ cc_library {
     },
     min_sdk_version: "29",
 
-    tidy: true,
+    lto: {
+        thin: true, tidy: true,
+    },
+
     tidy_flags: [
         // Only check our headers
         "--header-filter=^.*frameworks/native/libs/binder/.*.h$",
