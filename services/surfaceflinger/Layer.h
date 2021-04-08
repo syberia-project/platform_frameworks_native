@@ -443,6 +443,7 @@ public:
     //  If the variable is not set on the layer, it traverses up the tree to inherit the frame
     //  rate priority from its parent.
     virtual int32_t getFrameRateSelectionPriority() const;
+    int32_t getPriority();
     virtual ui::Dataspace getDataSpace() const { return ui::Dataspace::UNKNOWN; }
 
     virtual sp<compositionengine::LayerFE> getCompositionEngineLayerFE() const;
@@ -1119,6 +1120,8 @@ private:
 
     // Game mode for the layer. Set by WindowManagerShell and recorded by SurfaceFlingerStats.
     GameMode mGameMode = GameMode::Unsupported;
+
+    mutable int32_t mPriority = Layer::PRIORITY_UNSET;
 
     // A list of regions on this layer that should have blurs.
     const std::vector<BlurRegion> getBlurRegions() const;
