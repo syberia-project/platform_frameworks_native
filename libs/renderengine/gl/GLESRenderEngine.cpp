@@ -1111,6 +1111,7 @@ status_t GLESRenderEngine::drawLayers(const DisplaySettings& display,
         fillRegionWithColor(display.clearRegion, 0.0, 0.0, 0.0, 1.0);
     }
 
+    int blurredLayers = 0;
     Mesh mesh = Mesh::Builder()
                         .setPrimitive(Mesh::TRIANGLE_FAN)
                         .setVertices(4 /* count */, 2 /* size */)
@@ -1148,13 +1149,15 @@ status_t GLESRenderEngine::drawLayers(const DisplaySettings& display,
                 return status;
             }
 
-            status = mBlurFilter->render(blurLayersSize > 1);
+            status = mBlurFilter->render(blurLayersSize, blurredLayers);
             if (status != NO_ERROR) {
                 ALOGE("Failed to render blur effect! Aborting GPU composition for buffer (%p).",
                       buffer->handle);
                 checkErrors("Can't render blur filter");
                 return status;
             }
+
+            blurredLayers += 1;
         }
 
         mState.maxMasteringLuminance = layer->source.buffer.maxMasteringLuminance;
