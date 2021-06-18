@@ -2,5 +2,5 @@ service vndservicemanager /vendor/bin/vndservicemanager /dev/vndbinder
     class core
     user system
     group system readproc
-    writepid /dev/cpuset/system-background/tasks
+    task_profiles ServiceCapacityLow
     shutdown critical
