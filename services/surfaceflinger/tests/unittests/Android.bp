@@ -54,6 +54,7 @@ cc_test {
         "DisplayDevice_InitiateModeChange.cpp",
         "DisplayDevice_SetProjectionTest.cpp",
         "EventThreadTest.cpp",
+        "FlagManagerTest.cpp",
         "FpsReporterTest.cpp",
         "FpsTest.cpp",
         "FramebufferSurfaceTest.cpp",
@@ -161,6 +162,7 @@ cc_test {
         "libsync",
         "libui",
         "libutils",
+        "server_configurable_flags",
     ],
     header_libs: [
         "android.hardware.graphics.composer@2.1-command-buffer",

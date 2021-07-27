@@ -67,6 +67,7 @@ cc_defaults {
         "libinput",
         "libutils",
         "libSurfaceFlingerProp",
+        "server_configurable_flags",
     ],
     static_libs: [
         "libcompositionengine",
@@ -155,6 +156,7 @@ filegroup {
         "DisplayRenderArea.cpp",
         "Effects/Daltonizer.cpp",
         "EventLog/EventLog.cpp",
+        "FlagManager.cpp",
         "FpsReporter.cpp",
         "FrameTracer/FrameTracer.cpp",
         "FrameTracker.cpp",
