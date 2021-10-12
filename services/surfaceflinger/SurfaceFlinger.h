@@ -1524,6 +1524,13 @@ private:
     const sp<WindowInfosListenerInvoker> mWindowInfosListenerInvoker;
 
     std::unique_ptr<FlagManager> mFlagManager;
+
+    struct {
+        bool sessionEnabled = false;
+        nsecs_t commitStart;
+        nsecs_t compositeStart;
+        nsecs_t presentEnd;
+    } mPowerHintSessionData GUARDED_BY(SF_MAIN_THREAD);
 };
 
 } // namespace android
