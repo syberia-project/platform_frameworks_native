@@ -135,6 +135,7 @@ LIBBINDER_NDK31 { # introduced=31
     AIBinder_Weak_clone;
     AIBinder_Weak_lt;
     AIBinder_lt;
+    AIBinder_setMinSchedulerPolicy; # llndk
     AParcel_appendFrom;
     AParcel_create;
     AParcel_getDataSize;
