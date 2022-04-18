@@ -19,6 +19,7 @@
 #include <SurfaceFlingerProperties.sysprop.h>
 #include <android-base/parsebool.h>
 #include <android-base/parseint.h>
+#include <android-base/properties.h>
 #include <android-base/stringprintf.h>
 #include <log/log.h>
 #include <server_configurable_flags/get_flags.h>
@@ -93,7 +94,8 @@ int64_t FlagManager::demo_flag() const {
 }
 
 bool FlagManager::use_adpf_cpu_hint() const {
-    std::optional<bool> sysPropVal = std::nullopt;
+    std::optional<bool> sysPropVal =
+            doParse<bool>(base::GetProperty("debug.sf.enable_adpf_cpu_hint", "").c_str());
     return getValue("AdpfFeature__adpf_cpu_hint", sysPropVal, false);
 }
 

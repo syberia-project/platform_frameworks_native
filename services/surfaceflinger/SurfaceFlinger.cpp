@@ -770,8 +770,12 @@ void SurfaceFlinger::bootFinished() {
             tidList.emplace_back(*renderEngineTid);
         }
         mPowerAdvisor.onBootFinished();
-        mPowerAdvisor.enablePowerHint(mFlagManager->use_adpf_cpu_hint());
-        if (mPowerAdvisor.usePowerHintSession()) {
+        const bool powerHintEnabled = mFlagManager->use_adpf_cpu_hint();
+        mPowerAdvisor.enablePowerHint(powerHintEnabled);
+        const bool powerHintUsed = mPowerAdvisor.usePowerHintSession();
+        ALOGD("Power hint is %s",
+              powerHintUsed ? "supported" : (powerHintEnabled ? "unsupported" : "disabled"));
+        if (powerHintUsed) {
             mPowerAdvisor.startPowerHintSession(tidList);
         }
 
