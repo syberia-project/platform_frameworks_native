@@ -172,8 +172,6 @@ cc_defaults {
 
         "BitTube.cpp",
         "BLASTBufferQueue.cpp",
-        "BufferHubConsumer.cpp",
-        "BufferHubProducer.cpp",
         "BufferItemConsumer.cpp",
         "ConsumerBase.cpp",
         "CpuConsumer.cpp",
@@ -211,9 +209,6 @@ cc_defaults {
 
     shared_libs: [
         "libbinder",
-        "libbufferhub",
-        "libbufferhubqueue", // TODO(b/70046255): Remove this once BufferHub is integrated into libgui.
-        "libpdx_default_transport",
     ],
 
     export_shared_lib_headers: [
@@ -223,24 +218,6 @@ cc_defaults {
     export_header_lib_headers: [
         "libgui_aidl_headers",
     ],
-
-    // bufferhub is not used when building libgui for vendors
-    target: {
-        vendor: {
-            cflags: [
-                "-DNO_BUFFERHUB",
-            ],
-            exclude_srcs: [
-                "BufferHubConsumer.cpp",
-                "BufferHubProducer.cpp",
-            ],
-            exclude_shared_libs: [
-                "libbufferhub",
-                "libbufferhubqueue",
-                "libpdx_default_transport",
-            ],
-        },
-    },
 
     aidl: {
         export_aidl_headers: true,
@@ -271,7 +248,6 @@ cc_library_static {
     min_sdk_version: "29",
 
     cflags: [
-        "-DNO_BUFFERHUB",
         "-DNO_BINDER",
     ],
 
