@@ -97,7 +97,7 @@ void FrameTargeter::beginFrame(const BeginFrameArgs& args, const IVsyncSource& v
     //
     // TODO(b/280667110): The grace period should depend on `sfWorkDuration` and `vsyncPeriod` being
     // approximately equal, not whether backpressure propagation is enabled.
-    const int graceTimeForPresentFenceMs = static_cast<int>(
+    const int graceTimeForPresentFenceMs = mPropagateBackpressure && static_cast<int>(
             mBackpressureGpuComposition || !mCompositionCoverage.test(CompositionCoverage::Gpu));
 
     // Pending frames may trigger backpressure propagation.
