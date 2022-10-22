@@ -135,6 +135,7 @@ public:
             int64_t             clearCallingIdentity();
             // Restores PID/UID (not SID)
             void                restoreCallingIdentity(int64_t token);
+            bool hasExplicitIdentity();
 
             status_t            setupPolling(int* fd);
             status_t            handlePolledCommands();
@@ -237,6 +238,7 @@ private:
             bool                mPropagateWorkSource;
             bool                mIsLooper;
             bool mIsFlushing;
+            bool mHasExplicitIdentity;
             int32_t             mStrictModePolicy;
             int32_t             mLastTransactionBinderFlags;
             CallRestriction     mCallRestriction;
