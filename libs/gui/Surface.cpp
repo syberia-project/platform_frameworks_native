@@ -793,6 +793,7 @@ int Surface::dequeueBuffers(std::vector<BatchBuffer>* buffers) {
     }
 
     std::vector<CancelBufferInput> cancelBufferInputs;
+    cancelBufferInputs.reserve(numBufferRequested);
     std::vector<status_t> cancelBufferOutputs;
     for (size_t i = 0; i < numBufferRequested; i++) {
         if (dequeueOutput[i].result >= 0) {
