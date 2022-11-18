@@ -234,8 +234,8 @@ HidlComposer::HidlComposer(const std::string& serviceName) : mWriter(kWriterInit
 bool HidlComposer::isSupported(OptionalFeature feature) const {
     switch (feature) {
         case OptionalFeature::RefreshRateSwitching:
-            return mClient_2_4 != nullptr;
         case OptionalFeature::ExpectedPresentTime:
+            return mClient_2_4 != nullptr;
         case OptionalFeature::DisplayBrightnessCommand:
         case OptionalFeature::KernelIdleTimer:
         case OptionalFeature::PhysicalDisplayOrientation:
@@ -647,11 +647,12 @@ Error HidlComposer::validateDisplay(Display display, nsecs_t /*expectedPresentTi
     return Error::NONE;
 }
 
-Error HidlComposer::presentOrValidateDisplay(Display display, nsecs_t /*expectedPresentTime*/,
+Error HidlComposer::presentOrValidateDisplay(Display display, nsecs_t expectedPresentTime,
                                              uint32_t* outNumTypes, uint32_t* outNumRequests,
                                              int* outPresentFence, uint32_t* state) {
     ATRACE_NAME("HwcPresentOrValidateDisplay");
     mWriter.selectDisplay(display);
+    mWriter.setExpectedPresentTime(expectedPresentTime);
     mWriter.presentOrvalidateDisplay();
 
     Error error = execute();
