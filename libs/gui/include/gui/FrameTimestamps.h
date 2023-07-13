@@ -114,11 +114,9 @@ public:
     void checkFencesForCompletion();
     void dump(std::string& outString) const;
 
-    static const size_t INITIAL_MAX_FRAME_HISTORY;
+    static const size_t MAX_FRAME_HISTORY;
 
 protected:
-    void resize(size_t newSize);
-
     std::vector<FrameEvents> mFrames;
 
     CompositorTiming mCompositorTiming;
@@ -156,8 +154,6 @@ protected:
     // virtual for testing.
     virtual std::shared_ptr<FenceTime> createFenceTime(
             const sp<Fence>& fence) const;
-
-    void resize(size_t newSize);
 
     size_t mAcquireOffset{0};
 
@@ -229,8 +225,6 @@ public:
 
     void getAndResetDelta(FrameEventHistoryDelta* delta);
 
-    void resize(size_t newSize);
-
 private:
     void getFrameDelta(FrameEventHistoryDelta* delta,
                        const std::vector<FrameEvents>::iterator& frame);
@@ -272,10 +266,6 @@ public:
             size_t& count) const;
     status_t unflatten(void const*& buffer, size_t& size, int const*& fds,
             size_t& count);
-
-    uint64_t getFrameNumber() const;
-    bool getLatchTime(nsecs_t* latchTime) const;
-    bool getDisplayPresentFence(sp<Fence>* fence) const;
 
 private:
     static constexpr size_t minFlattenedSize();
@@ -336,9 +326,6 @@ public:
             size_t& count) const;
     status_t unflatten(void const*& buffer, size_t& size, int const*& fds,
             size_t& count);
-
-    std::vector<FrameEventsDelta>::const_iterator begin() const;
-    std::vector<FrameEventsDelta>::const_iterator end() const;
 
 private:
     static constexpr size_t minFlattenedSize();

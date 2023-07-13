@@ -725,7 +725,8 @@ inline status_t flatten(HGraphicBufferProducer::FrameEventsDelta const& t,
         std::vector<native_handle_t*>* nh,
         void*& buffer, size_t& size, int*& fds, size_t numFds) {
     // Check that t.index is within a valid range.
-    if (t.index > UINT8_MAX || t.index < 0) {
+    if (t.index >= static_cast<uint32_t>(FrameEventHistory::MAX_FRAME_HISTORY)
+            || t.index > std::numeric_limits<uint8_t>::max()) {
         return BAD_VALUE;
     }
 
@@ -828,7 +829,7 @@ inline status_t flatten(
         HGraphicBufferProducer::FrameEventHistoryDelta const& t,
         std::vector<std::vector<native_handle_t*> >* nh,
         void*& buffer, size_t& size, int*& fds, size_t& numFds) {
-    if (t.deltas.size() > UINT8_MAX) {
+    if (t.deltas.size() > ::android::FrameEventHistory::MAX_FRAME_HISTORY) {
         return BAD_VALUE;
     }
     if (size < getFlattenedSize(t)) {

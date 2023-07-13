@@ -162,12 +162,6 @@ status_t BufferQueueProducer::requestBuffer(int slot, sp<GraphicBuffer>* buf) {
 
 status_t BufferQueueProducer::setMaxDequeuedBufferCount(
         int maxDequeuedBuffers) {
-    int maxBufferCount;
-    return setMaxDequeuedBufferCount(maxDequeuedBuffers, &maxBufferCount);
-}
-
-status_t BufferQueueProducer::setMaxDequeuedBufferCount(int maxDequeuedBuffers,
-                                                        int* maxBufferCount) {
     ATRACE_CALL();
     BQ_LOGV("setMaxDequeuedBufferCount: maxDequeuedBuffers = %d",
             maxDequeuedBuffers);
@@ -182,8 +176,6 @@ status_t BufferQueueProducer::setMaxDequeuedBufferCount(int maxDequeuedBuffers,
                     "abandoned");
             return NO_INIT;
         }
-
-        *maxBufferCount = mCore->getMaxBufferCountLocked();
 
         if (maxDequeuedBuffers == mCore->mMaxDequeuedBufferCount) {
             return NO_ERROR;
@@ -235,7 +227,6 @@ status_t BufferQueueProducer::setMaxDequeuedBufferCount(int maxDequeuedBuffers,
             return BAD_VALUE;
         }
         mCore->mMaxDequeuedBufferCount = maxDequeuedBuffers;
-        *maxBufferCount = mCore->getMaxBufferCountLocked();
         VALIDATE_CONSISTENCY();
         if (delta < 0) {
             listener = mCore->mConsumerListener;
