@@ -3609,6 +3609,14 @@ void InputDispatcher::synthesizeCancelationEventsForInputChannelLocked(
 
 void InputDispatcher::synthesizeCancelationEventsForConnectionLocked(
         const sp<Connection>& connection, const CancelationOptions& options) {
+    if ((options.mode == CancelationOptions::CANCEL_POINTER_EVENTS ||
+         options.mode == CancelationOptions::CANCEL_ALL_EVENTS) &&
+        mDragState && mDragState->dragWindow->getToken() == connection->inputChannel->getToken()) {
+        ALOGW("Cancel drag and drop when synthesize cancel pointer event for drag connection.");
+        sendDropWindowCommandLocked(nullptr, 0, 0);
+        mDragState.reset();
+    }
+
     if (connection->status == Connection::Status::BROKEN) {
         return;
     }
