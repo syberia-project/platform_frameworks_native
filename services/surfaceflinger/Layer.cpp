@@ -4294,7 +4294,6 @@ void Layer::updateSnapshot(bool updateGeometry) {
         prepareBasicGeometryCompositionState();
         prepareGeometryCompositionState();
         snapshot->roundedCorner = getRoundedCornerState();
-        snapshot->stretchEffect = getStretchEffect();
         snapshot->transformedBounds = mScreenBounds;
         if (mEffectiveShadowRadius > 0.f) {
             snapshot->shadowSettings = mFlinger->mDrawingState.globalShadowSettings;
