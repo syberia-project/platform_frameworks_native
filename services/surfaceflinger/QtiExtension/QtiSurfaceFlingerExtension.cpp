@@ -1626,7 +1626,7 @@ uint32_t QtiSurfaceFlingerExtension::qtiGetLayerClass(std::string mName) {
         uint32_t layerClass = static_cast<uint32_t>(mQtiLayerExt->GetLayerClass(mName));
         return layerClass;
     }
-    ALOGV("%s: QtiLayerExtension is not enabled, setting layer class to 0");
+    ALOGV("QtiLayerExtension is not enabled, setting layer class to 0");
     return 0;
 }
 

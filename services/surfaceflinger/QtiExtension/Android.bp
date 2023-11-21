@@ -79,6 +79,9 @@ qtidisplayextension_cc_library_static {
     cflags: [
         "-DLOG_TAG=\"QtiSurfaceFlingerExtension\"",
         "-Wno-macro-redefined",
+        "-Wno-format",
+        "-Wno-format-insufficient-args",
+        "-Wno-unused-variable",
         "-Wthread-safety",
         "-Wthread-safety-analysis"
     ],

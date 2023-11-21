@@ -10,7 +10,7 @@ package {
 cc_defaults {
     name: "surfaceflinger_defaults",
     cflags: [
-        "-Wall",
+//        "-Wall",
         "-Werror",
         "-Wextra",
         "-Wformat",
@@ -19,6 +19,8 @@ cc_defaults {
         "-Wunused",
         "-Wunreachable-code",
         "-Wconversion",
+        "-Wno-unused-parameter",
+        "-Wno-unused-variable",
         "-DANDROID_UTILS_REF_BASE_DISABLE_IMPLICIT_CONSTRUCTION",
         "-DDISABLE_DEVICE_INTEGRATION",
     ],

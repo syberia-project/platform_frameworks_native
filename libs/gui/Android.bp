@@ -437,14 +437,7 @@ cc_library_static {
 }
 
 // QTI_BEGIN
-soong_config_module_type_import {
-    from: "frameworks/native/services/surfaceflinger/QtiExtension/Android.bp",
-    module_types: [
-        "qtidisplayextension_cc_library_static",
-        "qtidisplayextension_cc_defaults",],
-}
-
-qtidisplayextension_cc_library_static {
+cc_library_static {
     name: "libqtiguiextension",
     vendor_available: true,
     defaults: [
@@ -456,38 +449,29 @@ qtidisplayextension_cc_library_static {
     static_libs: [
         "libgui_window_info_static"
     ],
-    soong_config_variables: {
-        displayextension: {
-            cflags: [
-                "-DQTI_DISPLAY_EXTENSION",
-            ],
-            srcs: [
-                "QtiExtension/QtiBufferQueueProducerExtension.cpp",
-            ],
-       },
-    },
+    shared_libs: [
+//            "//vendor/qcom/opensource/display:libdisplayconfig.system.qti",
+            "libbinder_ndk",
+            "vendor.qti.hardware.display.composer@3.0",
+            "vendor.qti.hardware.display.composer@3.1",
+            "vendor.qti.hardware.display.config-V7-ndk",
+    ],
     srcs: [
+        "QtiExtension/QtiBufferQueueProducerExtension.cpp",
         "QtiExtension/QtiBLASTBufferQueueExtension.cpp",
+    ],
+    cflags: [
+        "-Wno-unused-parameter",
+        "-DQTI_DISPLAY_EXTENSION",
     ],
     local_include_dirs: ["QtiExtension"],
     export_include_dirs: ["QtiExtension"],
 }
 
-qtidisplayextension_cc_defaults {
-    name: "guicommonsys_defaults",
-    soong_config_variables: {
-        displayextension: {
-            cflags: [
-                "-DQTI_DISPLAY_EXTENSION",
-            ],
-        }
-    }
-}
-
 cc_defaults {
     name: "libguiextension_defaults",
-    defaults: [
-        "guicommonsys_defaults",
+    cflags: [
+            "-DQTI_DISPLAY_EXTENSION",
     ],
 }
 // QTI_END
