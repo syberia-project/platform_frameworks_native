@@ -2165,7 +2165,7 @@ void SurfaceFlinger::onRefreshRateChangedDebug(const RefreshRateChangedDebugData
     }
 }
 
-void SurfaceFlinger::configure() {
+void SurfaceFlinger::configure() FTL_FAKE_GUARD(kMainThreadContext) {
     Mutex::Autolock lock(mStateLock);
     if (configureLocked()) {
         setTransactionFlags(eDisplayTransactionNeeded);
@@ -2339,7 +2339,8 @@ bool SurfaceFlinger::updateLayerSnapshots(VsyncId vsyncId, frontend::Update& upd
     return mustComposite;
 }
 
-bool SurfaceFlinger::commit(const scheduler::FrameTarget& pacesetterFrameTarget) {
+bool SurfaceFlinger::commit(const scheduler::FrameTarget& pacesetterFrameTarget)
+        FTL_FAKE_GUARD(kMainThreadContext) {
     const VsyncId vsyncId = pacesetterFrameTarget.vsyncId();
     ATRACE_NAME(ftl::Concat(__func__, ' ', ftl::to_underlying(vsyncId)).c_str());
 
@@ -2476,42 +2477,31 @@ bool SurfaceFlinger::commit(const scheduler::FrameTarget& pacesetterFrameTarget)
     return mustComposite && CC_LIKELY(mBootStage != BootStage::BOOTLOADER);
 }
 
-CompositeResultsPerDisplay SurfaceFlinger::composite(
-        PhysicalDisplayId pacesetterId, const scheduler::FrameTargeters& frameTargeters) {
-    const scheduler::FrameTarget& pacesetterTarget =
-            frameTargeters.get(pacesetterId)->get()->target();
+CompositeResult SurfaceFlinger::composite(scheduler::FrameTargeter& pacesetterFrameTargeter)
+        FTL_FAKE_GUARD(kMainThreadContext) {
+    const scheduler::FrameTarget& pacesetterFrameTarget = pacesetterFrameTargeter.target();
 
-    const VsyncId vsyncId = pacesetterTarget.vsyncId();
+    const VsyncId vsyncId = pacesetterFrameTarget.vsyncId();
     ATRACE_NAME(ftl::Concat(__func__, ' ', ftl::to_underlying(vsyncId)).c_str());
 
     compositionengine::CompositionRefreshArgs refreshArgs;
     refreshArgs.powerCallback = this;
     const auto& displays = FTL_FAKE_GUARD(mStateLock, mDisplays);
     refreshArgs.outputs.reserve(displays.size());
-
-    // Add outputs for physical displays.
-    for (const auto& [id, targeter] : frameTargeters) {
-        ftl::FakeGuard guard(mStateLock);
-
-        if (const auto display = getCompositionDisplayLocked(id)) {
-            refreshArgs.outputs.push_back(display);
-        }
-    }
-
     std::vector<DisplayId> displayIds;
     for (const auto& [_, display] : displays) {
         displayIds.push_back(display->getId());
         display->tracePowerMode();
 
-        // Add outputs for virtual displays.
         if (display->isVirtual()) {
             const Fps refreshRate = display->getAdjustedRefreshRate();
-
-            if (!refreshRate.isValid() ||
-                mScheduler->isVsyncInPhase(pacesetterTarget.frameBeginTime(), refreshRate)) {
-                refreshArgs.outputs.push_back(display->getCompositionDisplay());
+            if (refreshRate.isValid() &&
+                !mScheduler->isVsyncInPhase(pacesetterFrameTarget.frameBeginTime(), refreshRate)) {
+                continue;
             }
         }
+
+        refreshArgs.outputs.push_back(display->getCompositionDisplay());
     }
     mPowerAdvisor->setDisplays(displayIds);
 
@@ -2571,16 +2561,15 @@ CompositeResultsPerDisplay SurfaceFlinger::composite(
 
     if (!getHwComposer().getComposer()->isSupported(
                 Hwc2::Composer::OptionalFeature::ExpectedPresentTime) &&
-        pacesetterTarget.wouldPresentEarly(vsyncPeriod)) {
+        pacesetterFrameTarget.wouldPresentEarly(vsyncPeriod)) {
         const auto hwcMinWorkDuration = mVsyncConfiguration->getCurrentConfigs().hwcMinWorkDuration;
 
-        // TODO(b/255601557): Calculate and pass per-display values for each FrameTarget.
         refreshArgs.earliestPresentTime =
-                pacesetterTarget.previousFrameVsyncTime(vsyncPeriod) - hwcMinWorkDuration;
+                pacesetterFrameTarget.previousFrameVsyncTime(vsyncPeriod) - hwcMinWorkDuration;
     }
 
     refreshArgs.scheduledFrameTime = mScheduler->getScheduledFrameTime();
-    refreshArgs.expectedPresentTime = pacesetterTarget.expectedPresentTime().ns();
+    refreshArgs.expectedPresentTime = pacesetterFrameTarget.expectedPresentTime().ns();
     refreshArgs.hasTrustedPresentationListener = mNumTrustedPresentationListeners > 0;
 
     // Store the present time just before calling to the composition engine so we could notify
@@ -2606,14 +2595,14 @@ CompositeResultsPerDisplay SurfaceFlinger::composite(
         }
     }
 
-    mTimeStats->recordFrameDuration(pacesetterTarget.frameBeginTime().ns(), systemTime());
+    mTimeStats->recordFrameDuration(pacesetterFrameTarget.frameBeginTime().ns(), systemTime());
 
     // Send a power hint after presentation is finished.
     if (mPowerHintSessionEnabled) {
         // Now that the current frame has been presented above, PowerAdvisor needs the present time
         // of the previous frame (whose fence is signaled by now) to determine how long the HWC had
         // waited on that fence to retire before presenting.
-        const auto& previousPresentFence = pacesetterTarget.presentFenceForPreviousFrame();
+        const auto& previousPresentFence = pacesetterFrameTarget.presentFenceForPreviousFrame();
 
         mPowerAdvisor->setSfPresentTiming(TimePoint::fromNs(previousPresentFence->getSignalTime()),
                                           TimePoint::now());
@@ -2624,27 +2613,23 @@ CompositeResultsPerDisplay SurfaceFlinger::composite(
         scheduleComposite(FrameHint::kNone);
     }
 
-    postComposition(pacesetterId, frameTargeters, presentTime);
+    postComposition(pacesetterFrameTargeter, presentTime);
 
-    const bool hadGpuComposited =
-            multiDisplayUnion(mCompositionCoverage).test(CompositionCoverage::Gpu);
+    const bool hadGpuComposited = mCompositionCoverage.test(CompositionCoverage::Gpu);
     mCompositionCoverage.clear();
 
     TimeStats::ClientCompositionRecord clientCompositionRecord;
-
     for (const auto& [_, display] : displays) {
         const auto& state = display->getCompositionDisplay()->getState();
-        CompositionCoverageFlags& flags =
-                mCompositionCoverage.try_emplace(display->getId()).first->second;
 
         if (state.usesDeviceComposition) {
-            flags |= CompositionCoverage::Hwc;
+            mCompositionCoverage |= CompositionCoverage::Hwc;
         }
 
         if (state.reusedClientComposition) {
-            flags |= CompositionCoverage::GpuReuse;
+            mCompositionCoverage |= CompositionCoverage::GpuReuse;
         } else if (state.usesClientComposition) {
-            flags |= CompositionCoverage::Gpu;
+            mCompositionCoverage |= CompositionCoverage::Gpu;
         }
 
         clientCompositionRecord.predicted |=
@@ -2653,11 +2638,10 @@ CompositeResultsPerDisplay SurfaceFlinger::composite(
                 (state.strategyPrediction == CompositionStrategyPredictionState::SUCCESS);
     }
 
-    const auto coverage = multiDisplayUnion(mCompositionCoverage);
-    const bool hasGpuComposited = coverage.test(CompositionCoverage::Gpu);
+    const bool hasGpuComposited = mCompositionCoverage.test(CompositionCoverage::Gpu);
 
     clientCompositionRecord.hadClientComposition = hasGpuComposited;
-    clientCompositionRecord.reused = coverage.test(CompositionCoverage::GpuReuse);
+    clientCompositionRecord.reused = mCompositionCoverage.test(CompositionCoverage::GpuReuse);
     clientCompositionRecord.changed = hadGpuComposited != hasGpuComposited;
 
     mTimeStats->pushCompositionStrategyState(clientCompositionRecord);
@@ -2666,13 +2650,13 @@ CompositeResultsPerDisplay SurfaceFlinger::composite(
 
     // TODO(b/160583065): Enable skip validation when SF caches all client composition layers.
     const bool hasGpuUseOrReuse =
-            coverage.any(CompositionCoverage::Gpu | CompositionCoverage::GpuReuse);
+            mCompositionCoverage.any(CompositionCoverage::Gpu | CompositionCoverage::GpuReuse);
     mScheduler->modulateVsync({}, &VsyncModulator::onDisplayRefresh, hasGpuUseOrReuse);
 
     mLayersWithQueuedFrames.clear();
     if (mLayerTracingEnabled && mLayerTracing.flagIsSet(LayerTracing::TRACE_COMPOSITION)) {
         // This will block and should only be used for debugging.
-        addToLayerTracing(mVisibleRegionsDirty, pacesetterTarget.frameBeginTime(), vsyncId);
+        addToLayerTracing(mVisibleRegionsDirty, pacesetterFrameTarget.frameBeginTime(), vsyncId);
     }
 
     if (mVisibleRegionsDirty) mHdrLayerInfoChanged = true;
@@ -2686,16 +2670,7 @@ CompositeResultsPerDisplay SurfaceFlinger::composite(
         mPowerAdvisor->setCompositeEnd(TimePoint::now());
     }
 
-    CompositeResultsPerDisplay resultsPerDisplay;
-
-    // Filter out virtual displays.
-    for (const auto& [id, coverage] : mCompositionCoverage) {
-        if (const auto idOpt = PhysicalDisplayId::tryCast(id)) {
-            resultsPerDisplay.try_emplace(*idOpt, CompositeResult{coverage});
-        }
-    }
-
-    return resultsPerDisplay;
+    return {mCompositionCoverage};
 }
 
 void SurfaceFlinger::updateLayerGeometry() {
@@ -2780,56 +2755,35 @@ ui::Rotation SurfaceFlinger::getPhysicalDisplayOrientation(DisplayId displayId,
     return ui::ROTATION_0;
 }
 
-void SurfaceFlinger::postComposition(PhysicalDisplayId pacesetterId,
-                                     const scheduler::FrameTargeters& frameTargeters,
+void SurfaceFlinger::postComposition(scheduler::FrameTargeter& pacesetterFrameTargeter,
                                      nsecs_t presentStartTime) {
     ATRACE_CALL();
     ALOGV(__func__);
 
-    ui::PhysicalDisplayMap<PhysicalDisplayId, std::shared_ptr<FenceTime>> presentFences;
-    ui::PhysicalDisplayMap<PhysicalDisplayId, const sp<Fence>> gpuCompositionDoneFences;
+    const auto* defaultDisplay = FTL_FAKE_GUARD(mStateLock, getDefaultDisplayDeviceLocked()).get();
 
-    for (const auto& [id, targeter] : frameTargeters) {
-        auto presentFence = getHwComposer().getPresentFence(id);
-
-        if (id == pacesetterId) {
-            mTransactionCallbackInvoker.addPresentFence(presentFence);
-        }
-
-        if (auto fenceTime = targeter->setPresentFence(std::move(presentFence));
-            fenceTime->isValid()) {
-            presentFences.try_emplace(id, std::move(fenceTime));
-        }
-
-        ftl::FakeGuard guard(mStateLock);
-        if (const auto display = getCompositionDisplayLocked(id);
-            display && display->getState().usesClientComposition) {
-            gpuCompositionDoneFences
-                    .try_emplace(id, display->getRenderSurface()->getClientTargetAcquireFence());
-        }
+    std::shared_ptr<FenceTime> glCompositionDoneFenceTime;
+    if (defaultDisplay &&
+        defaultDisplay->getCompositionDisplay()->getState().usesClientComposition) {
+        glCompositionDoneFenceTime =
+                std::make_shared<FenceTime>(defaultDisplay->getCompositionDisplay()
+                                                    ->getRenderSurface()
+                                                    ->getClientTargetAcquireFence());
+    } else {
+        glCompositionDoneFenceTime = FenceTime::NO_FENCE;
     }
 
-    const auto pacesetterDisplay = FTL_FAKE_GUARD(mStateLock, getDisplayDeviceLocked(pacesetterId));
+    auto presentFence = defaultDisplay
+            ? getHwComposer().getPresentFence(defaultDisplay->getPhysicalId())
+            : Fence::NO_FENCE;
 
-    std::shared_ptr<FenceTime> pacesetterPresentFenceTime =
-            presentFences.get(pacesetterId)
-                    .transform([](const FenceTimePtr& ptr) { return ptr; })
-                    .value_or(FenceTime::NO_FENCE);
-
-    std::shared_ptr<FenceTime> pacesetterGpuCompositionDoneFenceTime =
-            gpuCompositionDoneFences.get(pacesetterId)
-                    .transform([](sp<Fence> fence) {
-                        return std::make_shared<FenceTime>(std::move(fence));
-                    })
-                    .value_or(FenceTime::NO_FENCE);
-
+    auto presentFenceTime = pacesetterFrameTargeter.setPresentFence(presentFence);
     const TimePoint presentTime = TimePoint::now();
 
     // Set presentation information before calling Layer::releasePendingBuffer, such that jank
     // information from previous' frame classification is already available when sending jank info
     // to clients, so they get jank classification as early as possible.
-    mFrameTimeline->setSfPresent(presentTime.ns(), pacesetterPresentFenceTime,
-                                 pacesetterGpuCompositionDoneFenceTime);
+    mFrameTimeline->setSfPresent(presentTime.ns(), presentFenceTime, glCompositionDoneFenceTime);
 
     // We use the CompositionEngine::getLastFrameRefreshTimestamp() which might
     // be sampled a little later than when we started doing work for this frame,
@@ -2837,9 +2791,9 @@ void SurfaceFlinger::postComposition(PhysicalDisplayId pacesetterId,
     const TimePoint compositeTime =
             TimePoint::fromNs(mCompositionEngine->getLastFrameRefreshTimestamp());
     const Duration presentLatency =
-            getHwComposer().hasCapability(Capability::PRESENT_FENCE_IS_NOT_RELIABLE)
-            ? Duration::zero()
-            : mPresentLatencyTracker.trackPendingFrame(compositeTime, pacesetterPresentFenceTime);
+            !getHwComposer().hasCapability(Capability::PRESENT_FENCE_IS_NOT_RELIABLE)
+            ? mPresentLatencyTracker.trackPendingFrame(compositeTime, presentFenceTime)
+            : Duration::zero();
 
     const auto schedule = mScheduler->getVsyncSchedule();
     const TimePoint vsyncDeadline = schedule->vsyncDeadlineAfter(presentTime);
@@ -2876,8 +2830,8 @@ void SurfaceFlinger::postComposition(PhysicalDisplayId pacesetterId,
     mLayersWithBuffersRemoved.clear();
 
     for (const auto& layer: mLayersWithQueuedFrames) {
-        layer->onPostComposition(pacesetterDisplay.get(), pacesetterGpuCompositionDoneFenceTime,
-                                 pacesetterPresentFenceTime, compositorTiming);
+        layer->onPostComposition(defaultDisplay, glCompositionDoneFenceTime, presentFenceTime,
+                                 compositorTiming);
         layer->releasePendingBuffer(presentTime.ns());
     }
 
@@ -2940,28 +2894,34 @@ void SurfaceFlinger::postComposition(PhysicalDisplayId pacesetterId,
 
     mHdrLayerInfoChanged = false;
 
+    mTransactionCallbackInvoker.addPresentFence(std::move(presentFence));
     mTransactionCallbackInvoker.sendCallbacks(false /* onCommitOnly */);
     mTransactionCallbackInvoker.clearCompletedTransactions();
 
     mTimeStats->incrementTotalFrames();
-    mTimeStats->setPresentFenceGlobal(pacesetterPresentFenceTime);
+    mTimeStats->setPresentFenceGlobal(presentFenceTime);
 
-    for (auto&& [id, presentFence] : presentFences) {
+    {
         ftl::FakeGuard guard(mStateLock);
-        const bool isInternalDisplay =
-                mPhysicalDisplays.get(id).transform(&PhysicalDisplay::isInternal).value_or(false);
-
-        if (isInternalDisplay) {
-            mScheduler->addPresentFence(id, std::move(presentFence));
+        for (const auto& [id, physicalDisplay] : mPhysicalDisplays) {
+            if (auto displayDevice = getDisplayDeviceLocked(id);
+                displayDevice && displayDevice->isPoweredOn() && physicalDisplay.isInternal()) {
+                auto presentFenceTimeI = defaultDisplay && defaultDisplay->getPhysicalId() == id
+                        ? std::move(presentFenceTime)
+                        : std::make_shared<FenceTime>(getHwComposer().getPresentFence(id));
+                if (presentFenceTimeI->isValid()) {
+                    mScheduler->addPresentFence(id, std::move(presentFenceTimeI));
+                }
+            }
         }
     }
 
-    const bool hasPacesetterDisplay =
-            pacesetterDisplay && getHwComposer().isConnected(pacesetterId);
+    const bool isDisplayConnected =
+            defaultDisplay && getHwComposer().isConnected(defaultDisplay->getPhysicalId());
 
     if (!hasSyncFramework) {
-        if (hasPacesetterDisplay && pacesetterDisplay->isPoweredOn()) {
-            mScheduler->enableHardwareVsync(pacesetterId);
+        if (isDisplayConnected && defaultDisplay->isPoweredOn()) {
+            mScheduler->enableHardwareVsync(defaultDisplay->getPhysicalId());
         }
     }
 
@@ -2969,7 +2929,7 @@ void SurfaceFlinger::postComposition(PhysicalDisplayId pacesetterId,
     const size_t appConnections = mScheduler->getEventThreadConnectionCount(mAppConnectionHandle);
     mTimeStats->recordDisplayEventConnectionCount(sfConnections + appConnections);
 
-    if (hasPacesetterDisplay && !pacesetterDisplay->isPoweredOn()) {
+    if (isDisplayConnected && !defaultDisplay->isPoweredOn()) {
         getRenderEngine().cleanupPostRender();
         return;
     }
@@ -4251,7 +4211,7 @@ TransactionHandler::TransactionReadiness SurfaceFlinger::transactionReadyTimelin
     const auto& transaction = *flushState.transaction;
 
     const TimePoint desiredPresentTime = TimePoint::fromNs(transaction.desiredPresentTime);
-    const TimePoint expectedPresentTime = mScheduler->expectedPresentTimeForPacesetter();
+    const TimePoint expectedPresentTime = mScheduler->pacesetterFrameTarget().expectedPresentTime();
 
     using TransactionReadiness = TransactionHandler::TransactionReadiness;
 

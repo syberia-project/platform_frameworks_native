@@ -20,7 +20,6 @@
 #include <atomic>
 #include <memory>
 
-#include <ui/DisplayId.h>
 #include <ui/Fence.h>
 #include <ui/FenceTime.h>
 
@@ -76,17 +75,16 @@ public:
     bool didMissHwcFrame() const { return mHwcFrameMissed && !mGpuFrameMissed; }
 
 protected:
-    explicit FrameTarget(const std::string& displayLabel);
     ~FrameTarget() = default;
 
     VsyncId mVsyncId;
     TimePoint mFrameBeginTime;
     TimePoint mExpectedPresentTime;
 
-    TracedOrdinal<bool> mFramePending;
-    TracedOrdinal<bool> mFrameMissed;
-    TracedOrdinal<bool> mHwcFrameMissed;
-    TracedOrdinal<bool> mGpuFrameMissed;
+    TracedOrdinal<bool> mFramePending{"PrevFramePending", false};
+    TracedOrdinal<bool> mFrameMissed{"PrevFrameMissed", false};
+    TracedOrdinal<bool> mHwcFrameMissed{"PrevHwcFrameMissed", false};
+    TracedOrdinal<bool> mGpuFrameMissed{"PrevGpuFrameMissed", false};
 
     struct FenceWithFenceTime {
         sp<Fence> fence = Fence::NO_FENCE;
@@ -105,9 +103,8 @@ private:
 // Computes a display's per-frame metrics about past/upcoming targeting of present deadlines.
 class FrameTargeter final : private FrameTarget {
 public:
-    FrameTargeter(PhysicalDisplayId displayId, bool backpressureGpuComposition)
-          : FrameTarget(to_string(displayId)),
-            mBackpressureGpuComposition(backpressureGpuComposition) {}
+    explicit FrameTargeter(bool backpressureGpuComposition)
+          : mBackpressureGpuComposition(backpressureGpuComposition) {}
 
     const FrameTarget& target() const { return *this; }
 

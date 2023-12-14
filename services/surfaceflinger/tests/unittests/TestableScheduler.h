@@ -174,10 +174,7 @@ private:
     // ICompositor overrides:
     void configure() override {}
     bool commit(const scheduler::FrameTarget&) override { return false; }
-    CompositeResultsPerDisplay composite(PhysicalDisplayId,
-                                         const scheduler::FrameTargeters&) override {
-        return {};
-    }
+    CompositeResult composite(scheduler::FrameTargeter&) override { return {}; }
     void sample() override {}
 };
 

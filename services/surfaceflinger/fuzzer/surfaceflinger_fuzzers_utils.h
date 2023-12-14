@@ -287,10 +287,7 @@ private:
     // ICompositor overrides:
     void configure() override {}
     bool commit(const scheduler::FrameTarget&) override { return false; }
-    CompositeResultsPerDisplay composite(PhysicalDisplayId,
-                                         const scheduler::FrameTargeters&) override {
-        return {};
-    }
+    CompositeResult composite(scheduler::FrameTargeter&) override { return {}; }
     void sample() override {}
 
     // MessageQueue overrides:
@@ -477,25 +474,25 @@ public:
                                            &outWideColorGamutPixelFormat);
     }
 
-    void overrideHdrTypes(const sp<IBinder>& display, FuzzedDataProvider* fdp) {
+    void overrideHdrTypes(sp<IBinder> &display, FuzzedDataProvider *fdp) {
         std::vector<ui::Hdr> hdrTypes;
         hdrTypes.push_back(fdp->PickValueInArray(kHdrTypes));
         mFlinger->overrideHdrTypes(display, hdrTypes);
     }
 
-    void getDisplayedContentSample(const sp<IBinder>& display, FuzzedDataProvider* fdp) {
+    void getDisplayedContentSample(sp<IBinder> &display, FuzzedDataProvider *fdp) {
         DisplayedFrameStats outDisplayedFrameStats;
         mFlinger->getDisplayedContentSample(display, fdp->ConsumeIntegral<uint64_t>(),
                                             fdp->ConsumeIntegral<uint64_t>(),
                                             &outDisplayedFrameStats);
     }
 
-    void getDisplayStats(const sp<IBinder>& display) {
+    void getDisplayStats(sp<IBinder> &display) {
         android::DisplayStatInfo stats;
         mFlinger->getDisplayStats(display, &stats);
     }
 
-    void getDisplayState(const sp<IBinder>& display) {
+    void getDisplayState(sp<IBinder> &display) {
         ui::DisplayState displayState;
         mFlinger->getDisplayState(display, &displayState);
     }
@@ -509,12 +506,12 @@ public:
         android::ui::DynamicDisplayInfo dynamicDisplayInfo;
         mFlinger->getDynamicDisplayInfoFromId(displayId, &dynamicDisplayInfo);
     }
-    void getDisplayNativePrimaries(const sp<IBinder>& display) {
+    void getDisplayNativePrimaries(sp<IBinder> &display) {
         android::ui::DisplayPrimaries displayPrimaries;
         mFlinger->getDisplayNativePrimaries(display, displayPrimaries);
     }
 
-    void getDesiredDisplayModeSpecs(const sp<IBinder>& display) {
+    void getDesiredDisplayModeSpecs(sp<IBinder> &display) {
         gui::DisplayModeSpecs _;
         mFlinger->getDesiredDisplayModeSpecs(display, &_);
     }
@@ -526,7 +523,7 @@ public:
         return ids.front();
     }
 
-    std::pair<sp<IBinder>, PhysicalDisplayId> fuzzBoot(FuzzedDataProvider* fdp) {
+    std::pair<sp<IBinder>, int64_t> fuzzBoot(FuzzedDataProvider *fdp) {
         mFlinger->callingThreadHasUnscopedSurfaceFlingerAccess(fdp->ConsumeBool());
         const sp<Client> client = sp<Client>::make(mFlinger);
 
@@ -553,13 +550,13 @@ public:
 
         mFlinger->bootFinished();
 
-        return {display, physicalDisplayId};
+        return {display, physicalDisplayId.value};
     }
 
     void fuzzSurfaceFlinger(const uint8_t *data, size_t size) {
         FuzzedDataProvider mFdp(data, size);
 
-        const auto [display, displayId] = fuzzBoot(&mFdp);
+        auto [display, displayId] = fuzzBoot(&mFdp);
 
         sp<IGraphicBufferProducer> bufferProducer = sp<mock::GraphicBufferProducer>::make();
 
@@ -567,8 +564,8 @@ public:
 
         getDisplayStats(display);
         getDisplayState(display);
-        getStaticDisplayInfo(displayId.value);
-        getDynamicDisplayInfo(displayId.value);
+        getStaticDisplayInfo(displayId);
+        getDynamicDisplayInfo(displayId);
         getDisplayNativePrimaries(display);
 
         mFlinger->setAutoLowLatencyMode(display, mFdp.ConsumeBool());
@@ -608,9 +605,8 @@ public:
             mFlinger->commitTransactions();
             mFlinger->flushTransactionQueues(getFuzzedVsyncId(mFdp));
 
-            scheduler::FrameTargeter frameTargeter(displayId, mFdp.ConsumeBool());
-            mFlinger->postComposition(displayId, ftl::init::map(displayId, &frameTargeter),
-                                      mFdp.ConsumeIntegral<nsecs_t>());
+            scheduler::FrameTargeter frameTargeter(mFdp.ConsumeBool());
+            mFlinger->postComposition(frameTargeter, mFdp.ConsumeIntegral<nsecs_t>());
         }
 
         mFlinger->setTransactionFlags(mFdp.ConsumeIntegral<uint32_t>());

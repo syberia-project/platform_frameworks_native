@@ -25,7 +25,6 @@
 #include <android/hardware/configstore/1.0/ISurfaceFlingerConfigs.h>
 #include <android/hardware/configstore/1.1/ISurfaceFlingerConfigs.h>
 #include <configstore/Utils.h>
-#include <ftl/concat.h>
 #include <ftl/enum.h>
 #include <ftl/fake_guard.h>
 #include <ftl/small_map.h>
@@ -131,8 +130,8 @@ void Scheduler::registerDisplayInternal(PhysicalDisplayId displayId,
     auto [pacesetterVsyncSchedule, isNew] = [&]() FTL_FAKE_GUARD(kMainThreadContext) {
         std::scoped_lock lock(mDisplayLock);
         const bool isNew = mDisplays
-                                   .emplace_or_replace(displayId, displayId, std::move(selectorPtr),
-                                                       std::move(schedulePtr), mFeatures)
+                                   .emplace_or_replace(displayId, std::move(selectorPtr),
+                                                       std::move(schedulePtr))
                                    .second;
 
         return std::make_pair(promotePacesetterDisplayLocked(), isNew);
@@ -172,43 +171,21 @@ void Scheduler::run() {
 
 void Scheduler::onFrameSignal(ICompositor& compositor, VsyncId vsyncId,
                               TimePoint expectedVsyncTime) {
-    const FrameTargeter::BeginFrameArgs beginFrameArgs =
-            {.frameBeginTime = SchedulerClock::now(),
-             .vsyncId = vsyncId,
-             // TODO(b/255601557): Calculate per display.
-             .expectedVsyncTime = expectedVsyncTime,
-             .sfWorkDuration = mVsyncModulator->getVsyncConfig().sfWorkDuration};
+    mPacesetterFrameTargeter.beginFrame({.frameBeginTime = SchedulerClock::now(),
+                                         .vsyncId = vsyncId,
+                                         .expectedVsyncTime = expectedVsyncTime,
+                                         .sfWorkDuration =
+                                                 mVsyncModulator->getVsyncConfig().sfWorkDuration},
+                                        *getVsyncSchedule());
 
-    LOG_ALWAYS_FATAL_IF(!mPacesetterDisplayId);
-    const auto pacesetterId = *mPacesetterDisplayId;
-    const auto pacesetterOpt = mDisplays.get(pacesetterId);
-
-    FrameTargeter& pacesetterTargeter = *pacesetterOpt->get().targeterPtr;
-    pacesetterTargeter.beginFrame(beginFrameArgs, *pacesetterOpt->get().schedulePtr);
-
-    if (!compositor.commit(pacesetterTargeter.target())) return;
-
-    // TODO(b/256196556): Choose the frontrunner display.
-    FrameTargeters targeters;
-    targeters.try_emplace(pacesetterId, &pacesetterTargeter);
-
-    for (auto& [id, display] : mDisplays) {
-        if (id == pacesetterId) continue;
-
-        FrameTargeter& targeter = *display.targeterPtr;
-        targeter.beginFrame(beginFrameArgs, *display.schedulePtr);
-
-        targeters.try_emplace(id, &targeter);
+    if (!compositor.commit(mPacesetterFrameTargeter.target())) {
+        return;
     }
 
-    const auto resultsPerDisplay = compositor.composite(pacesetterId, targeters);
+    const auto compositeResult = compositor.composite(mPacesetterFrameTargeter);
     compositor.sample();
 
-    for (const auto& [id, targeter] : targeters) {
-        const auto resultOpt = resultsPerDisplay.get(id);
-        LOG_ALWAYS_FATAL_IF(!resultOpt);
-        targeter->endFrame(*resultOpt);
-    }
+    mPacesetterFrameTargeter.endFrame(compositeResult);
 }
 
 std::optional<Fps> Scheduler::getFrameRateOverride(uid_t uid) const {
@@ -557,16 +534,8 @@ bool Scheduler::addResyncSample(PhysicalDisplayId id, nsecs_t timestamp,
 }
 
 void Scheduler::addPresentFence(PhysicalDisplayId id, std::shared_ptr<FenceTime> fence) {
-    const auto scheduleOpt =
-            (ftl::FakeGuard(mDisplayLock), mDisplays.get(id)).and_then([](const Display& display) {
-                return display.powerMode == hal::PowerMode::OFF
-                        ? std::nullopt
-                        : std::make_optional(display.schedulePtr);
-            });
-
-    if (!scheduleOpt) return;
-    const auto& schedule = scheduleOpt->get();
-
+    auto schedule = getVsyncSchedule(id);
+    LOG_ALWAYS_FATAL_IF(!schedule);
     if (const bool needMoreSignals = schedule->getController().addPresentFence(std::move(fence))) {
         schedule->enableHardwareVsync();
     } else {
@@ -755,23 +724,7 @@ void Scheduler::dump(utils::Dumper& dumper) const {
     mFrameRateOverrideMappings.dump(dumper);
     dumper.eol();
 
-    {
-        utils::Dumper::Section section(dumper, "Frame Targeting"sv);
-
-        std::scoped_lock lock(mDisplayLock);
-        ftl::FakeGuard guard(kMainThreadContext);
-
-        for (const auto& [id, display] : mDisplays) {
-            utils::Dumper::Section
-                    section(dumper,
-                            id == mPacesetterDisplayId
-                                    ? ftl::Concat("Pacesetter Display ", id.value).c_str()
-                                    : ftl::Concat("Follower Display ", id.value).c_str());
-
-            display.targeterPtr->dump(dumper);
-            dumper.eol();
-        }
-    }
+    mPacesetterFrameTargeter.dump(dumper);
 }
 
 void Scheduler::dumpVsync(std::string& out) const {

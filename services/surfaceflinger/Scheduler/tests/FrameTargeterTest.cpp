@@ -96,7 +96,7 @@ private:
     FenceToFenceTimeMap mFenceMap;
 
     static constexpr bool kBackpressureGpuComposition = true;
-    FrameTargeter mTargeter{PhysicalDisplayId::fromPort(13), kBackpressureGpuComposition};
+    FrameTargeter mTargeter{kBackpressureGpuComposition};
 };
 
 TEST_F(FrameTargeterTest, targetsFrames) {

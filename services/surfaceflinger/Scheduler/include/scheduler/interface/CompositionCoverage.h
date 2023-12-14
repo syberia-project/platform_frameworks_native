@@ -19,8 +19,6 @@
 #include <cstdint>
 
 #include <ftl/flags.h>
-#include <ui/DisplayId.h>
-#include <ui/DisplayMap.h>
 
 namespace android {
 
@@ -35,15 +33,5 @@ enum class CompositionCoverage : std::uint8_t {
 };
 
 using CompositionCoverageFlags = ftl::Flags<CompositionCoverage>;
-
-using CompositionCoveragePerDisplay = ui::DisplayMap<DisplayId, CompositionCoverageFlags>;
-
-inline CompositionCoverageFlags multiDisplayUnion(const CompositionCoveragePerDisplay& displays) {
-    CompositionCoverageFlags coverage;
-    for (const auto& [id, flags] : displays) {
-        coverage |= flags;
-    }
-    return coverage;
-}
 
 } // namespace android

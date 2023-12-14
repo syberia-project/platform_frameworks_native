@@ -221,7 +221,7 @@ public:
     // otherwise.
     bool addResyncSample(PhysicalDisplayId, nsecs_t timestamp,
                          std::optional<nsecs_t> hwcVsyncPeriod);
-    void addPresentFence(PhysicalDisplayId, std::shared_ptr<FenceTime>)
+    void addPresentFence(PhysicalDisplayId, std::shared_ptr<FenceTime>) EXCLUDES(mDisplayLock)
             REQUIRES(kMainThreadContext);
 
     // Layers are registered on creation, and unregistered when the weak reference expires.
@@ -251,14 +251,7 @@ public:
         return std::const_pointer_cast<VsyncSchedule>(std::as_const(*this).getVsyncSchedule(idOpt));
     }
 
-    TimePoint expectedPresentTimeForPacesetter() const EXCLUDES(mDisplayLock) {
-        std::scoped_lock lock(mDisplayLock);
-        return pacesetterDisplayLocked()
-                .transform([](const Display& display) {
-                    return display.targeterPtr->target().expectedPresentTime();
-                })
-                .value_or(TimePoint());
-    }
+    const FrameTarget& pacesetterFrameTarget() { return mPacesetterFrameTargeter.target(); }
 
     // Returns true if a given vsync timestamp is considered valid vsync
     // for a given uid
@@ -326,8 +319,7 @@ private:
     enum class TouchState { Inactive, Active };
 
     // impl::MessageQueue overrides:
-    void onFrameSignal(ICompositor&, VsyncId, TimePoint expectedVsyncTime) override
-            REQUIRES(kMainThreadContext, mDisplayLock);
+    void onFrameSignal(ICompositor&, VsyncId, TimePoint expectedVsyncTime) override;
 
     // Create a connection on the given EventThread.
     ConnectionHandle createConnection(std::unique_ptr<EventThread>);
@@ -450,24 +442,13 @@ private:
     // must lock for writes but not reads. See also mPolicyLock for locking order.
     mutable std::mutex mDisplayLock;
 
-    using FrameTargeterPtr = std::unique_ptr<FrameTargeter>;
-
     struct Display {
-        Display(PhysicalDisplayId displayId, RefreshRateSelectorPtr selectorPtr,
-                VsyncSchedulePtr schedulePtr, FeatureFlags features)
-              : displayId(displayId),
-                selectorPtr(std::move(selectorPtr)),
-                schedulePtr(std::move(schedulePtr)),
-                targeterPtr(std::make_unique<
-                            FrameTargeter>(displayId,
-                                           features.test(Feature::kBackpressureGpuComposition))) {}
-
-        const PhysicalDisplayId displayId;
+        Display(RefreshRateSelectorPtr selectorPtr, VsyncSchedulePtr schedulePtr)
+              : selectorPtr(std::move(selectorPtr)), schedulePtr(std::move(schedulePtr)) {}
 
         // Effectively const except in move constructor.
         RefreshRateSelectorPtr selectorPtr;
         VsyncSchedulePtr schedulePtr;
-        FrameTargeterPtr targeterPtr;
 
         hal::PowerMode powerMode = hal::PowerMode::OFF;
     };
@@ -480,6 +461,8 @@ private:
 
     ftl::Optional<PhysicalDisplayId> mPacesetterDisplayId GUARDED_BY(mDisplayLock)
             GUARDED_BY(kMainThreadContext);
+
+    FrameTargeter mPacesetterFrameTargeter{mFeatures.test(Feature::kBackpressureGpuComposition)};
 
     ftl::Optional<DisplayRef> pacesetterDisplayLocked() REQUIRES(mDisplayLock) {
         return static_cast<const Scheduler*>(this)->pacesetterDisplayLocked().transform(
