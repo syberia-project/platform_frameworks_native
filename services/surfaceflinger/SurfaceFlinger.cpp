@@ -5538,22 +5538,18 @@ void SurfaceFlinger::setPowerModeInternal(const sp<DisplayDevice>& display, hal:
         // Turn off the display
 
         if (displayId == mActiveDisplayId) {
-            if (const auto display = getActivatableDisplay()) {
-                onActiveDisplayChangedLocked(activeDisplay.get(), *display);
-            } else {
-                if (setSchedFifo(false) != NO_ERROR) {
-                    ALOGW("Failed to set SCHED_OTHER after powering off active display: %s",
-                          strerror(errno));
-                }
-                if (setSchedAttr(false) != NO_ERROR) {
-                    ALOGW("Failed set uclamp.min after powering off active display: %s",
-                          strerror(errno));
-                }
+            if (setSchedFifo(false) != NO_ERROR) {
+                ALOGW("Failed to set SCHED_OTHER after powering off active display: %s",
+                      strerror(errno));
+            }
+            if (setSchedAttr(false) != NO_ERROR) {
+                ALOGW("Failed set uclamp.min after powering off active display: %s",
+                      strerror(errno));
+            }
 
-                if (*currentModeOpt != hal::PowerMode::DOZE_SUSPEND) {
-                    mScheduler->disableHardwareVsync(displayId, true);
-                    mScheduler->enableSyntheticVsync();
-                }
+            if (*currentModeOpt != hal::PowerMode::DOZE_SUSPEND) {
+                mScheduler->disableHardwareVsync(displayId, true);
+                mScheduler->enableSyntheticVsync();
             }
         }
 
@@ -8020,20 +8016,6 @@ void SurfaceFlinger::onActiveDisplaySizeChanged(const DisplayDevice& activeDispl
             }
         });
     }
-}
-
-sp<DisplayDevice> SurfaceFlinger::getActivatableDisplay() const {
-    if (mPhysicalDisplays.size() == 1) return nullptr;
-
-    // TODO(b/255635821): Choose the pacesetter display, considering both internal and external
-    // displays. For now, pick the other internal display, assuming a dual-display foldable.
-    return findDisplay([this](const DisplayDevice& display) REQUIRES(mStateLock) {
-        const auto idOpt = PhysicalDisplayId::tryCast(display.getId());
-        return idOpt && *idOpt != mActiveDisplayId && display.isPoweredOn() &&
-                mPhysicalDisplays.get(*idOpt)
-                        .transform(&PhysicalDisplay::isInternal)
-                        .value_or(false);
-    });
 }
 
 void SurfaceFlinger::onActiveDisplayChangedLocked(const DisplayDevice* inactiveDisplayPtr,

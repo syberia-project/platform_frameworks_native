@@ -55,17 +55,13 @@ struct FoldableTest : DisplayTransactionTest {
     sp<DisplayDevice> mInnerDisplay, mOuterDisplay;
 };
 
-TEST_F(FoldableTest, promotesPacesetterOnBoot) {
+TEST_F(FoldableTest, foldUnfold) {
     // When the device boots, the inner display should be the pacesetter.
     ASSERT_EQ(mFlinger.scheduler()->pacesetterDisplayId(), kInnerDisplayId);
 
     // ...and should still be after powering on.
     mFlinger.setPowerModeInternal(mInnerDisplay, PowerMode::ON);
     ASSERT_EQ(mFlinger.scheduler()->pacesetterDisplayId(), kInnerDisplayId);
-}
-
-TEST_F(FoldableTest, promotesPacesetterOnFoldUnfold) {
-    mFlinger.setPowerModeInternal(mInnerDisplay, PowerMode::ON);
 
     // The outer display should become the pacesetter after folding.
     mFlinger.setPowerModeInternal(mInnerDisplay, PowerMode::OFF);
@@ -76,10 +72,6 @@ TEST_F(FoldableTest, promotesPacesetterOnFoldUnfold) {
     mFlinger.setPowerModeInternal(mOuterDisplay, PowerMode::OFF);
     mFlinger.setPowerModeInternal(mInnerDisplay, PowerMode::ON);
     ASSERT_EQ(mFlinger.scheduler()->pacesetterDisplayId(), kInnerDisplayId);
-}
-
-TEST_F(FoldableTest, promotesPacesetterOnConcurrentPowerOn) {
-    mFlinger.setPowerModeInternal(mInnerDisplay, PowerMode::ON);
 
     // The inner display should stay the pacesetter if both are powered on.
     // TODO(b/255635821): The pacesetter should depend on the displays' refresh rates.
@@ -89,28 +81,6 @@ TEST_F(FoldableTest, promotesPacesetterOnConcurrentPowerOn) {
     // The outer display should become the pacesetter if designated.
     mFlinger.scheduler()->setPacesetterDisplay(kOuterDisplayId);
     ASSERT_EQ(mFlinger.scheduler()->pacesetterDisplayId(), kOuterDisplayId);
-
-    // The inner display should become the pacesetter if designated.
-    mFlinger.scheduler()->setPacesetterDisplay(kInnerDisplayId);
-    ASSERT_EQ(mFlinger.scheduler()->pacesetterDisplayId(), kInnerDisplayId);
-}
-
-TEST_F(FoldableTest, promotesPacesetterOnConcurrentPowerOff) {
-    mFlinger.setPowerModeInternal(mInnerDisplay, PowerMode::ON);
-    mFlinger.setPowerModeInternal(mOuterDisplay, PowerMode::ON);
-
-    // The outer display should become the pacesetter if the inner display powers off.
-    mFlinger.setPowerModeInternal(mInnerDisplay, PowerMode::OFF);
-    ASSERT_EQ(mFlinger.scheduler()->pacesetterDisplayId(), kOuterDisplayId);
-
-    // The outer display should stay the pacesetter if both are powered on.
-    // TODO(b/255635821): The pacesetter should depend on the displays' refresh rates.
-    mFlinger.setPowerModeInternal(mInnerDisplay, PowerMode::ON);
-    ASSERT_EQ(mFlinger.scheduler()->pacesetterDisplayId(), kOuterDisplayId);
-
-    // The inner display should become the pacesetter if the outer display powers off.
-    mFlinger.setPowerModeInternal(mOuterDisplay, PowerMode::OFF);
-    ASSERT_EQ(mFlinger.scheduler()->pacesetterDisplayId(), kInnerDisplayId);
 }
 
 TEST_F(FoldableTest, doesNotRequestHardwareVsyncIfPoweredOff) {
