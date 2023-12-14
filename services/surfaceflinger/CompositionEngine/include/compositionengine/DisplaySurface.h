@@ -29,6 +29,12 @@ class Fence;
 class IGraphicBufferProducer;
 class String8;
 
+/* QTI_BEGIN */
+namespace surfaceflingerextension {
+class QtiDisplaySurfaceExtensionIntf;
+} // namespace surfaceflingerextension
+/* QTI_END */
+
 namespace compositionengine {
 
 /**
@@ -75,6 +81,12 @@ public:
 
     // Returns true if the render surface supports client composition prediction.
     virtual bool supportsCompositionStrategyPrediction() const;
+
+    /* QTI_BEGIN */
+#ifdef QTI_DISPLAY_EXTENSION
+    virtual surfaceflingerextension::QtiDisplaySurfaceExtensionIntf* qtiGetDisplaySurfaceExtn() = 0;
+    /* QTI_END */
+#endif
 };
 
 } // namespace compositionengine

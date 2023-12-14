@@ -14,6 +14,12 @@
  * limitations under the License.
  */
 
+/* Changes from Qualcomm Innovation Center are provided under the following license:
+ *
+ * Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause-Clear
+ */
+
 // TODO(b/129481165): remove the #pragma below and fix conversion issues
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wconversion"
@@ -33,6 +39,10 @@
 #include "SurfaceFlinger.h"
 #include "VirtualDisplaySurface.h"
 
+/* QTI_BEGIN */
+#include "../QtiExtension/QtiSurfaceFlingerExtensionFactory.h"
+/* QTI_END */
+
 #define VDS_LOGE(msg, ...) ALOGE("[%s] " msg, \
         mDisplayName.c_str(), ##__VA_ARGS__)
 #define VDS_LOGW_IF(cond, msg, ...) ALOGW_IF(cond, "[%s] " msg, \
@@ -50,7 +60,8 @@ VirtualDisplaySurface::VirtualDisplaySurface(HWComposer& hwc, VirtualDisplayId d
                                              const sp<IGraphicBufferProducer>& sink,
                                              const sp<IGraphicBufferProducer>& bqProducer,
                                              const sp<IGraphicBufferConsumer>& bqConsumer,
-                                             const std::string& name)
+                                             const std::string& name,
+                                             /* QTI_BEGIN */ bool qtiSecure /* QTI_END */)
       : ConsumerBase(bqConsumer),
         mHwc(hwc),
         mDisplayId(displayId),
@@ -87,6 +98,16 @@ VirtualDisplaySurface::VirtualDisplaySurface(HWComposer& hwc, VirtualDisplayId d
     // on usage bits.
     int sinkUsage;
     sink->query(NATIVE_WINDOW_CONSUMER_USAGE_BITS, &sinkUsage);
+
+    /* QTI_BEGIN */
+    if (!mQtiDSExtnIntf) {
+        mQtiDSExtnIntf = surfaceflingerextension::
+                qtiCreateDisplaySurfaceExtension(/* isVirtual */ true, this, qtiSecure, sinkUsage,
+                                                 /* FramebufferSurface */ nullptr);
+    }
+    mOutputUsage = mQtiDSExtnIntf->qtiSetOutputUsage();
+    /* QTI_ END */
+
     if (sinkUsage & (GRALLOC_USAGE_SW_READ_MASK | GRALLOC_USAGE_SW_WRITE_MASK)) {
         int sinkFormat;
         sink->query(NATIVE_WINDOW_FORMAT, &sinkFormat);
@@ -111,6 +132,10 @@ VirtualDisplaySurface::VirtualDisplaySurface(HWComposer& hwc, VirtualDisplayId d
 
 VirtualDisplaySurface::~VirtualDisplaySurface() {
     mSource[SOURCE_SCRATCH]->disconnect(NATIVE_WINDOW_API_EGL);
+
+    /* QTI_BEGIN */
+    delete mQtiDSExtnIntf;
+    /* QTI_END */
 }
 
 status_t VirtualDisplaySurface::beginFrame(bool mustRecompose) {
@@ -119,6 +144,14 @@ status_t VirtualDisplaySurface::beginFrame(bool mustRecompose) {
     }
 
     mMustRecompose = mustRecompose;
+
+    /* QTI_BEGIN */
+    // For WFD use cases we must always set the recompose flag in order
+    // to support pause/resume functionality
+    if (mOutputUsage & GRALLOC_USAGE_HW_VIDEO_ENCODER) {
+        mMustRecompose = true;
+    }
+    /* QTI_END */
 
     VDS_LOGW_IF(mDebugState != DebugState::Idle, "Unexpected %s in %s state", __func__,
                 ftl::enum_string(mDebugState).c_str());
@@ -156,7 +189,8 @@ status_t VirtualDisplaySurface::prepareFrame(CompositionType compositionType) {
     }
 
     if (mCompositionType != CompositionType::Gpu &&
-        (mOutputFormat != mDefaultOutputFormat || mOutputUsage != GRALLOC_USAGE_HW_COMPOSER)) {
+        (mOutputFormat != mDefaultOutputFormat ||
+         /* QTI_BEGIN */ !(mOutputUsage & GRALLOC_USAGE_HW_COMPOSER) /* QTI_END */)) {
         // We must have just switched from GPU-only to MIXED or HWC
         // composition. Stop using the format and usage requested by the GPU
         // driver; they may be suboptimal when HWC is writing to the output
@@ -168,7 +202,9 @@ status_t VirtualDisplaySurface::prepareFrame(CompositionType compositionType) {
         // format/usage and get a new buffer when the GPU driver calls
         // dequeueBuffer().
         mOutputFormat = mDefaultOutputFormat;
-        mOutputUsage = GRALLOC_USAGE_HW_COMPOSER;
+        /* QTI_BEGIN */
+        mOutputUsage = mQtiDSExtnIntf->qtiSetOutputUsage(GRALLOC_USAGE_HW_COMPOSER);
+        /* QTI_END */
         refreshOutputBuffer();
     }
 
@@ -254,7 +290,7 @@ void VirtualDisplaySurface::onFrameCommitted() {
         int sslot = mapProducer2SourceSlot(SOURCE_SINK, mOutputProducerSlot);
         QueueBufferOutput qbo;
         VDS_LOGV("%s: queue sink sslot=%d", __func__, sslot);
-        if (mMustRecompose) {
+        if (/* QTI_BEGIN */ retireFence->isValid() && /* QTI_END */ mMustRecompose) {
             status_t result = mSource[SOURCE_SINK]->queueBuffer(sslot,
                     QueueBufferInput(
                         systemTime(), false /* isAutoTimestamp */,
@@ -317,6 +353,12 @@ status_t VirtualDisplaySurface::setAsyncMode(bool async) {
 status_t VirtualDisplaySurface::dequeueBuffer(Source source,
         PixelFormat format, uint64_t usage, int* sslot, sp<Fence>* fence) {
     LOG_ALWAYS_FATAL_IF(GpuVirtualDisplayId::tryCast(mDisplayId).has_value());
+
+    /* QTI_BEGIN */
+    if (mQtiDSExtnIntf && source == SOURCE_SCRATCH) {
+        usage = mQtiDSExtnIntf->qtiExcludeVideoFromScratchBuffer(ftl::enum_string(source), usage);
+    }
+    /* QTI_END */
 
     status_t result =
             mSource[source]->dequeueBuffer(sslot, fence, mSinkBufferWidth, mSinkBufferHeight,
@@ -412,7 +454,9 @@ status_t VirtualDisplaySurface::dequeueBuffer(int* pslot, sp<Fence>* fence, uint
                      __func__, w, h, format, usage, mSinkBufferWidth, mSinkBufferHeight,
                      buf->getPixelFormat(), buf->getUsage());
             mOutputFormat = format;
-            mOutputUsage = usage;
+            /* QTI_BEGIN */
+            mOutputUsage = mQtiDSExtnIntf->qtiSetOutputUsage(usage);
+            /* QTI_END */
             result = refreshOutputBuffer();
             if (result < 0)
                 return result;

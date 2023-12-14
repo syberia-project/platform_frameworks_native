@@ -14,6 +14,12 @@
  * limitations under the License.
  */
 
+/* Changes from Qualcomm Innovation Center are provided under the following license:
+ *
+ * Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause-Center
+ */
+
 #include <inttypes.h>
 
 #define LOG_TAG "BufferQueueProducer"
@@ -42,6 +48,12 @@
 #include <utils/Trace.h>
 
 #include <system/window.h>
+
+/* QTI_BEGIN */
+#ifdef QTI_DISPLAY_EXTENSION
+#include "QtiExtension/QtiBufferQueueProducerExtension.h"
+#endif
+/* QTI_END */
 
 namespace android {
 
@@ -84,7 +96,15 @@ BufferQueueProducer::BufferQueueProducer(const sp<BufferQueueCore>& core,
     mCurrentCallbackTicket(0),
     mCallbackCondition(),
     mDequeueTimeout(-1),
-    mDequeueWaitingForAllocation(false) {}
+    mDequeueWaitingForAllocation(false) {
+/* QTI_BEGIN */
+#ifdef QTI_DISPLAY_EXTENSION
+    if (!mQtiBQPExtn) {
+        mQtiBQPExtn = new libguiextension::QtiBufferQueueProducerExtension(this);
+    }
+#endif
+/* QTI_END */
+}
 
 BufferQueueProducer::~BufferQueueProducer() {}
 
@@ -162,13 +182,14 @@ status_t BufferQueueProducer::setMaxDequeuedBufferCount(int maxDequeuedBuffers,
             return BAD_VALUE;
         }
 
-        int bufferCount = mCore->getMinUndequeuedBufferCountLocked();
-        bufferCount += maxDequeuedBuffers;
+        int minUndequedBufferCount = mCore->getMinUndequeuedBufferCountLocked();
+        int bufferCount = minUndequedBufferCount + maxDequeuedBuffers;
 
         if (bufferCount > BufferQueueDefs::NUM_BUFFER_SLOTS) {
             BQ_LOGE("setMaxDequeuedBufferCount: bufferCount %d too large "
                     "(max %d)", bufferCount, BufferQueueDefs::NUM_BUFFER_SLOTS);
-            return BAD_VALUE;
+            bufferCount = BufferQueueDefs::NUM_BUFFER_SLOTS;
+            maxDequeuedBuffers = bufferCount - minUndequedBufferCount;
         }
 
         const int minBufferSlots = mCore->getMinMaxBufferCountLocked();
@@ -878,6 +899,15 @@ status_t BufferQueueProducer::queueBuffer(int slot,
             BQ_LOGE("queueBuffer: unknown scaling mode %d", scalingMode);
             return BAD_VALUE;
     }
+
+/* QTI_BEGIN */
+#ifdef QTI_DISPLAY_EXTENSION
+    if (mQtiBQPExtn) {
+        mQtiBQPExtn->qtiQueueBuffer(isAutoTimestamp, requestedPresentTimestamp,
+                                    mCore->mConnectedApi);
+    }
+#endif
+/* QTI_END */
 
     sp<IConsumerListener> frameAvailableListener;
     sp<IConsumerListener> frameReplacedListener;

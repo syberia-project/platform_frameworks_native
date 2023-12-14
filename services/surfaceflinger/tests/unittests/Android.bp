@@ -180,6 +180,8 @@ cc_defaults {
         "libtimestats_proto",
         "libtonemap",
         "perfetto_trace_protos",
+        "libqticompositionengineextension",
+        "libqtisurfaceflingerextension",
     ],
     shared_libs: [
         "android.hardware.configstore-utils",

@@ -14,6 +14,12 @@
  * limitations under the License.
  */
 
+/* Changes from Qualcomm Innovation Center are provided under the following license:
+ *
+ * Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause-Clear
+ */
+
 // TODO(b/129481165): remove the #pragma below and fix conversion issues
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wconversion"
@@ -37,6 +43,7 @@
 
 #include <algorithm>
 #include <cinttypes>
+
 
 using aidl::android::hardware::graphics::common::HdrConversionCapability;
 using aidl::android::hardware::graphics::common::HdrConversionStrategy;
@@ -207,6 +214,55 @@ sp<GraphicBuffer> allocateClearSlotBuffer() {
 
 } // anonymous namespace
 
+/* QTI_BEGIN */
+void HidlComposer::CommandWriter::qtiSetDisplayElapseTime(uint64_t time) {
+    constexpr uint16_t kSetDisplayElapseTimeLength = 2;
+#ifdef QTI_DISPLAY_EXTENSION
+    beginCommand(static_cast<V2_1::IComposerClient::Command>(
+                         IQtiComposerClient::Command::SET_DISPLAY_ELAPSE_TIME),
+                 kSetDisplayElapseTimeLength);
+    write64(time);
+    endCommand();
+#endif
+}
+
+void HidlComposer::CommandWriter::qtiSetLayerType(uint32_t type) {
+    constexpr uint16_t kSetLayerTypeLength = 1;
+#ifdef QTI_DISPLAY_EXTENSION
+    beginCommand(static_cast<V2_1::IComposerClient::Command>(
+                         IQtiComposerClient::Command::SET_LAYER_TYPE),
+                 kSetLayerTypeLength);
+    write(type);
+    endCommand();
+#endif
+}
+
+void HidlComposer::CommandWriter::qtiSetClientTarget_3_1(int32_t slot, int acquireFence,
+                                                         Dataspace dataspace) {
+    constexpr uint16_t KSetClientTargetLength = 3;
+#ifdef QTI_DISPLAY_EXTENSION
+    beginCommand(static_cast<V2_1::IComposerClient::Command>(
+                         IQtiComposerClient::Command::SET_CLIENT_TARGET_3_1),
+                 KSetClientTargetLength);
+    write(slot);
+    writeFence(acquireFence);
+    writeSigned(static_cast<int32_t>(dataspace));
+    endCommand();
+#endif
+}
+
+void HidlComposer::CommandWriter::qtiSetLayerFlag(uint32_t type) {
+#ifdef QTI_DISPLAY_EXTENSION
+    constexpr uint16_t kSetLayerFlagLength = 1;
+    beginCommand(static_cast<V2_1::IComposerClient::Command>(
+                         IQtiComposerClient::Command::SET_LAYER_FLAG_3_1),
+                 kSetLayerFlagLength);
+    write(type);
+    endCommand();
+#endif
+}
+/* QTI_END */
+
 HidlComposer::HidlComposer(const std::string& serviceName)
       : mClearSlotBuffer(allocateClearSlotBuffer()), mWriter(kWriterInitialSize) {
     mComposer = V2_1::IComposer::getService(serviceName);
@@ -214,6 +270,22 @@ HidlComposer::HidlComposer(const std::string& serviceName)
     if (mComposer == nullptr) {
         LOG_ALWAYS_FATAL("failed to get hwcomposer service");
     }
+
+    /* QTI_BEGIN */
+#ifdef QTI_DISPLAY_EXTENSION
+    if (sp<IQtiComposer> composer_3_1 = IQtiComposer::castFrom(mComposer)) {
+        composer_3_1->createClient_3_1([&](const auto& tmpError, const auto& tmpClient) {
+            if (tmpError == V2_1::Error::NONE) {
+                mClient_3_1 = tmpClient;
+                mClient = tmpClient;
+                mClient_2_2 = tmpClient;
+                mClient_2_3 = tmpClient;
+                mClient_2_4 = tmpClient;
+            }
+        });
+    } else
+#endif
+    /* QTI_END */
 
     if (sp<IComposer> composer_2_4 = IComposer::castFrom(mComposer)) {
         composer_2_4->createClient_2_4([&](const auto& tmpError, const auto& tmpClient) {
@@ -682,6 +754,13 @@ Error HidlComposer::presentOrValidateDisplay(Display display, nsecs_t /*expected
     }
 
     mReader.takePresentOrValidateStage(display, state);
+
+    /* QTI_BEGIN */
+    if (*state == 2) { // Validate and present succeeded.
+        mReader.takePresentFence(display, outPresentFence);
+        mReader.hasChanges(display, outNumTypes, outNumRequests);
+    }
+    /* QTI_END */
 
     if (*state == 1) { // Present succeeded
         mReader.takePresentFence(display, outPresentFence);

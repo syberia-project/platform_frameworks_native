@@ -44,6 +44,10 @@
 #include "HWComposer.h"
 #include "../SurfaceFlinger.h"
 
+/* QTI_BEGIN */
+#include "../QtiExtension/QtiSurfaceFlingerExtensionFactory.h"
+/* QTI_END */
+
 namespace android {
 
 using ui::Dataspace;
@@ -76,6 +80,14 @@ FramebufferSurface::FramebufferSurface(HWComposer& hwc, PhysicalDisplayId displa
     for (size_t i = 0; i < sizeof(mHwcBufferIds) / sizeof(mHwcBufferIds[0]); ++i) {
         mHwcBufferIds[i] = UINT64_MAX;
     }
+
+    /* QTI_BEGIN */
+    if (!mQtiDSExtnIntf) {
+        mQtiDSExtnIntf = surfaceflingerextension::
+                qtiCreateDisplaySurfaceExtension(/* isVirtual */ false, nullptr, false, 0,
+                                                 /* FramebufferSurface */ this);
+    }
+    /* QTI_ END */
 }
 
 void FramebufferSurface::resizeBuffers(const ui::Size& newSize) {
@@ -97,11 +109,15 @@ status_t FramebufferSurface::advanceFrame() {
     BufferItem item;
     status_t err = acquireBufferLocked(&item, 0);
     if (err == BufferQueue::NO_BUFFER_AVAILABLE) {
-        mDataspace = Dataspace::UNKNOWN;
+        /* QTI_BEGIN */
+        // mDataspace = Dataspace::UNKNOWN;
+        /* QTI_END */
         return NO_ERROR;
     } else if (err != NO_ERROR) {
         ALOGE("error acquiring buffer: %s (%d)", strerror(-err), err);
-        mDataspace = Dataspace::UNKNOWN;
+        /* QTI_BEGIN */
+        // mDataspace = Dataspace::UNKNOWN;
+        /* QTI_END */
         return err;
     }
 

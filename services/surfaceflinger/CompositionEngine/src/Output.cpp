@@ -14,6 +14,12 @@
  * limitations under the License.
  */
 
+/* Changes from Qualcomm Innovation Center are provided under the following license:
+ *
+ * Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause-Clear
+ */
+
 #include <SurfaceFlingerProperties.sysprop.h>
 #include <android-base/stringprintf.h>
 #include <compositionengine/CompositionEngine.h>
@@ -42,7 +48,9 @@
 
 #include <renderengine/DisplaySettings.h>
 #include <renderengine/RenderEngine.h>
-
+#ifndef DISABLE_DEVICE_INTEGRATION
+#include <compositionengine/impl/Display.h>
+#endif
 // TODO(b/129481165): remove the #pragma below and fix conversion issues
 #pragma clang diagnostic pop // ignored "-Wconversion"
 
@@ -52,6 +60,11 @@
 #include <utils/Trace.h>
 
 #include "TracedOrdinal.h"
+
+// QTI_BEGIN
+#include "../QtiExtension/QtiOutputExtension.h"
+using android::compositionengineextension::QtiOutputExtension;
+// QTI_END
 
 using aidl::android::hardware::graphics::composer3::Composition;
 
@@ -99,6 +112,9 @@ ScaleVector getScale(const Rect& from, const Rect& to) {
 std::shared_ptr<Output> createOutput(
         const compositionengine::CompositionEngine& compositionEngine) {
     return createOutputTemplated<Output>(compositionEngine);
+}
+
+Output::Output() {
 }
 
 Output::~Output() = default;
@@ -513,6 +529,13 @@ void Output::collectVisibleLayers(const compositionengine::CompositionRefreshArg
     finalizePendingOutputLayers();
 }
 
+#ifndef DISABLE_DEVICE_INTEGRATION
+// Device Integration: if input window type is black screen
+bool Output::isBlackScreenLayer(int windowType) const {
+    return static_cast<gui::WindowInfo::Type>(windowType) == gui::WindowInfo::Type::SYSTEM_BLACKSCREEN_OVERLAY;
+}
+#endif
+
 void Output::ensureOutputLayerIfVisible(sp<compositionengine::LayerFE>& layerFE,
                                         compositionengine::Output::CoverageState& coverage) {
     // Ensure we have a snapshot of the basic geometry layer state. Limit the
@@ -526,6 +549,18 @@ void Output::ensureOutputLayerIfVisible(sp<compositionengine::LayerFE>& layerFE,
     if (!includesLayer(layerFE)) {
         return;
     }
+
+#ifndef DISABLE_DEVICE_INTEGRATION
+    // Device Integration: make black screen invisible in phone screen also in VD
+    if (isDisplayForDIS()) {
+        Display* display = static_cast<Display*>(this);
+        if (display->isVirtual()) {
+            if (isBlackScreenLayer(layerFE->getWindowTypeForDIS())) {
+                return;
+            }
+        }
+    }
+#endif
 
     // Obtain a read-only pointer to the front-end layer state
     const auto* layerFEState = layerFE->getCompositionState();
@@ -895,8 +930,16 @@ void Output::writeCompositionState(const compositionengine::CompositionRefreshAr
                     z, includeGeometry, overrideZ, isPeekingThrough,
                     layer->requiresClientComposition());
         }
+
+        // QTI_BEGIN
+        QtiOutputExtension::qtiWriteLayerFlagToHWC(layer->getHwcLayer(), this);
+        // QTI_END
     }
     editState().outputLayerHash = outputLayerHash;
+
+    // QTI_BEGIN
+    QtiOutputExtension::qtiGetVisibleLayerInfo(this);
+    // QTI_END
 }
 
 compositionengine::OutputLayer* Output::findLayerRequestingBackgroundComposition() const {
@@ -1005,11 +1048,18 @@ compositionengine::Output::ColorProfile Output::pickColorProfile(
     }
 
     // respect hdrDataSpace only when there is no legacy HDR support
-    const bool isHdr = hdrDataSpace != ui::Dataspace::UNKNOWN &&
+    bool isHdr = hdrDataSpace != ui::Dataspace::UNKNOWN &&
             !mDisplayColorProfile->hasLegacyHdrSupport(hdrDataSpace) && !isHdrClientComposition;
     if (isHdr) {
         bestDataSpace = hdrDataSpace;
     }
+
+    /* QTI_BEGIN */
+    if (QtiOutputExtension::qtiHasSecureDisplay(this)) {
+        bestDataSpace = ui::Dataspace::V0_SRGB;
+        isHdr = false;
+    }
+    /* QTI_END */
 
     ui::RenderIntent intent;
     switch (refreshArgs.outputColorSetting) {
@@ -1205,7 +1255,8 @@ void Output::finishFrame(GpuCompositionResult&& result) {
 void Output::updateProtectedContentState() {
     const auto& outputState = getState();
     auto& renderEngine = getCompositionEngine().getRenderEngine();
-    const bool supportsProtectedContent = renderEngine.supportsProtectedContent();
+
+    bool supportsProtectedContent = renderEngine.supportsProtectedContent();
 
     // If we the display is secure, protected content support is enabled, and at
     // least one layer has protected content, we need to use a secure back
@@ -1215,6 +1266,10 @@ void Output::updateProtectedContentState() {
         bool needsProtected = std::any_of(layers.begin(), layers.end(), [](auto* layer) {
             return layer->getLayerFE().getCompositionState()->hasProtectedContent;
         });
+
+        /* QTI_BEGIN */
+        needsProtected = needsProtected && QtiOutputExtension::qtiIsProtectedContent(this);
+        /* QTI_END */
         if (needsProtected != mRenderSurface->isProtected()) {
             mRenderSurface->setProtected(needsProtected);
         }
@@ -1269,7 +1324,10 @@ std::optional<base::unique_fd> Output::composeSurfaces(
 
     // Generate the client composition requests for the layers on this output.
     auto& renderEngine = getCompositionEngine().getRenderEngine();
-    const bool supportsProtectedContent = renderEngine.supportsProtectedContent();
+    const bool supportsProtectedContent = renderEngine.supportsProtectedContent()
+            /* QTI_BEGIN */
+            && mRenderSurface->isProtected(); /* QTI_END */
+
     std::vector<LayerFE*> clientCompositionLayersFE;
     std::vector<LayerFE::LayerSettings> clientCompositionLayers =
             generateClientCompositionRequests(supportsProtectedContent,
@@ -1280,7 +1338,10 @@ std::optional<base::unique_fd> Output::composeSurfaces(
     OutputCompositionState& outputCompositionState = editState();
     // Check if the client composition requests were rendered into the provided graphic buffer. If
     // so, we can reuse the buffer and avoid client composition.
-    if (mClientCompositionRequestCache) {
+    if (mClientCompositionRequestCache
+        /* QTI_BEGIN */
+        && (!QtiOutputExtension::qtiUseSpecFence() || mLayerRequestingBackgroundBlur != nullptr)
+        /* QTI_END */) {
         if (mClientCompositionRequestCache->exists(tex->getBuffer()->getId(),
                                                    clientCompositionDisplay,
                                                    clientCompositionLayers)) {

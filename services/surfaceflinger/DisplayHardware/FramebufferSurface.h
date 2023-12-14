@@ -36,6 +36,13 @@ class Rect;
 class String8;
 class HWComposer;
 
+/* QTI_BEGIN */
+namespace surfaceflingerextension {
+class QtiDisplaySurfaceExtensionIntf;
+class QtiFramebufferSurfaceExtension;
+} // namespace surfaceflingerextension
+/* QTI_END */
+
 // ---------------------------------------------------------------------------
 
 class FramebufferSurface : public ConsumerBase, public compositionengine::DisplaySurface {
@@ -53,6 +60,12 @@ public:
     virtual void resizeBuffers(const ui::Size&) override;
 
     virtual const sp<Fence>& getClientTargetAcquireFence() const override;
+
+    /* QTI_BEGIN */
+    virtual surfaceflingerextension::QtiDisplaySurfaceExtensionIntf* qtiGetDisplaySurfaceExtn() {
+        return mQtiDSExtnIntf;
+    }
+    /* QTI_END */
 
 private:
     friend class FramebufferSurfaceTest;
@@ -105,6 +118,11 @@ private:
     bool mHasPendingRelease;
     int mPreviousBufferSlot;
     sp<GraphicBuffer> mPreviousBuffer;
+
+    /* QTI_BEGIN */
+    friend class android::surfaceflingerextension::QtiFramebufferSurfaceExtension;
+    android::surfaceflingerextension::QtiDisplaySurfaceExtensionIntf* mQtiDSExtnIntf = nullptr;
+    /* QTI_END */
 };
 
 // ---------------------------------------------------------------------------

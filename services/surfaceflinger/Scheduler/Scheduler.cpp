@@ -14,6 +14,12 @@
  * limitations under the License.
  */
 
+/* Changes from Qualcomm Innovation Center are provided under the following license:
+ *
+ * Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause-Clear
+ */
+
 #undef LOG_TAG
 #define LOG_TAG "Scheduler"
 #define ATRACE_TAG ATRACE_TAG_GRAPHICS
@@ -858,6 +864,14 @@ auto Scheduler::applyPolicy(S Policy::*statePtr, T&& newState) -> GlobalSignals 
         frameRateOverridesChanged = updateFrameRateOverrides(consideredSignals, modeOpt->fps);
 
         if (mPolicy.modeOpt != modeOpt) {
+            /* QTI_BEGIN */
+            // Need a null pointer check for mPolicy since it's null during boot up
+            std::string str = "UpdateRefreshRate " +
+                    (!mPolicy.modeOpt ? "NA" : std::to_string(mPolicy.modeOpt->fps.getIntValue())) +
+                    " to " + std::to_string(modeOpt->fps.getIntValue());
+            ATRACE_NAME(str.c_str());
+            /* QTI_END */
+
             mPolicy.modeOpt = modeOpt;
             refreshRateChanged = true;
         } else {
@@ -997,5 +1011,12 @@ bool Scheduler::isSmallDirtyArea(uid_t uid, uint32_t dirtyArea) {
 
     return false;
 }
+
+/* QTI_BEGIN */
+void Scheduler::qtiUpdateThermalFps(float fps) {
+    mQtiThermalFps = fps;
+    mLayerHistory.qtiUpdateThermalFps(fps);
+}
+/* QTI_END */
 
 } // namespace android::scheduler

@@ -15,10 +15,12 @@ cc_defaults {
         "-Wextra",
         "-Wformat",
         "-Wthread-safety",
+        "-Wthread-safety-analysis",
         "-Wunused",
         "-Wunreachable-code",
         "-Wconversion",
         "-DANDROID_UTILS_REF_BASE_DISABLE_IMPLICIT_CONSTRUCTION",
+        "-DDISABLE_DEVICE_INTEGRATION",
     ],
 }
 
@@ -243,7 +245,10 @@ filegroup {
 
 cc_binary {
     name: "surfaceflinger",
-    defaults: ["libsurfaceflinger_binary"],
+    defaults: [
+        "libsurfaceflinger_binary",
+        "libqtisurfaceflingerextension_defaults",
+    ],
     init_rc: ["surfaceflinger.rc"],
     srcs: [
         ":surfaceflinger_binary_sources",
@@ -253,6 +258,11 @@ cc_binary {
     ],
     shared_libs: [
         "libSurfaceFlingerProp",
+    ],
+    static_libs: [
+        "libqticompositionengineextension",
+        "libqtisurfaceflingerextension",
+
     ],
 
     logtags: ["EventLog/EventLogTags.logtags"],

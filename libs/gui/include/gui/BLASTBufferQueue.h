@@ -14,6 +14,12 @@
  * limitations under the License.
  */
 
+/* Changes from Qualcomm Innovation Center are provided under the following license:
+ *
+ * Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause-Clear
+ */
+
 #ifndef ANDROID_GUI_BLAST_BUFFER_QUEUE_H
 #define ANDROID_GUI_BLAST_BUFFER_QUEUE_H
 
@@ -30,7 +36,17 @@
 #include <thread>
 #include <queue>
 
+/* QTI_BEGIN */
+#include "../../QtiExtension/QtiBLASTBufferQueueExtension.h"
+/* QTI_END */
+
 namespace android {
+
+/* QTI_BEGIN */
+namespace libguiextension {
+class QtiBLASTBufferQueueExtension;
+};
+/* QTI_END */
 
 class BLASTBufferQueue;
 class BufferItemConsumer;
@@ -83,6 +99,16 @@ public:
     sp<Surface> getSurface(bool includeSurfaceControlHandle);
     bool isSameSurfaceControl(const sp<SurfaceControl>& surfaceControl) const;
 
+    /* QTI_BEGIN */
+    void qtiSetUndequeuedBufferCount(int count) {
+        mQtiNumUndequeued = count;
+    }
+
+    int qtiGetUndequeuedBufferCount() const {
+        return mQtiNumUndequeued;
+    }
+    /* QTI_END */
+
     void onFrameReplaced(const BufferItem& item) override;
     void onFrameAvailable(const BufferItem& item) override;
     void onFrameDequeued(const uint64_t) override;
@@ -128,6 +154,11 @@ private:
     friend class BLASTBufferQueueHelper;
     friend class BBQBufferQueueProducer;
 
+    /* QTI_BEGIN */
+    friend class libguiextension::QtiBLASTBufferQueueExtension;
+    libguiextension::QtiBLASTBufferQueueExtension* mQtiBBQExtn = nullptr;
+    /* QTI_END */
+
     // can't be copied
     BLASTBufferQueue& operator = (const BLASTBufferQueue& rhs);
     BLASTBufferQueue(const BLASTBufferQueue& rhs);
@@ -165,6 +196,9 @@ private:
     // the max to be acquired
     int32_t mMaxAcquiredBuffers = 1;
 
+    /* QTI_BEGIN */
+    int mQtiNumUndequeued = 0;
+    /* QTI_END */
     int32_t mNumFrameAvailable GUARDED_BY(mMutex) = 0;
     int32_t mNumAcquired GUARDED_BY(mMutex) = 0;
 

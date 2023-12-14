@@ -13,6 +13,12 @@
  * limitations under the License.
  */
 
+/* Changes from Qualcomm Innovation Center are provided under the following license:
+ *
+ * Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause-Clear
+ */
+
 #pragma once
 
 #include <sys/types.h>
@@ -156,6 +162,14 @@ struct CompositionRefreshArgs;
 namespace renderengine {
 class RenderEngine;
 } // namespace renderengine
+
+/* QTI_BEGIN */
+namespace surfaceflingerextension {
+class QtiSurfaceFlingerExtension;
+class QtiNullExtension;
+class QtiSurfaceFlingerExtensionIntf;
+} // namespace surfaceflingerextension
+/* QTI_END */
 
 enum {
     eTransactionNeeded = 0x01,
@@ -377,6 +391,11 @@ private:
     friend class LayerTracing;
     friend class SurfaceComposerAIDL;
     friend class DisplayRenderArea;
+
+    /* QTI_BEGIN */
+    friend class ::android::surfaceflingerextension::QtiSurfaceFlingerExtension;
+    friend class ::android::surfaceflingerextension::QtiNullExtension;
+    /* QTI_END */
 
     // For unit tests
     friend class TestableSurfaceFlinger;
@@ -994,7 +1013,9 @@ private:
             std::shared_ptr<compositionengine::Display> compositionDisplay,
             const DisplayDeviceState& state,
             const sp<compositionengine::DisplaySurface>& displaySurface,
-            const sp<IGraphicBufferProducer>& producer) REQUIRES(mStateLock);
+            const sp<IGraphicBufferProducer>& producer,
+            surfaceflingerextension::QtiDisplaySurfaceExtensionIntf* mQtiDSExtnIntf = nullptr)
+            REQUIRES(mStateLock);
     void processDisplayChangesLocked() REQUIRES(mStateLock, kMainThreadContext);
     void processDisplayRemoved(const wp<IBinder>& displayToken)
             REQUIRES(mStateLock, kMainThreadContext);
@@ -1448,6 +1469,10 @@ private:
     // These classes do not store any client state but help with managing transaction callbacks
     // and stats.
     std::unordered_map<uint32_t, sp<Layer>> mLegacyLayers;
+
+    /* QTI_BEGIN */
+    surfaceflingerextension::QtiSurfaceFlingerExtensionIntf* mQtiSFExtnIntf = nullptr;
+    /* QTI_END */
 
     TransactionHandler mTransactionHandler;
     ui::DisplayMap<ui::LayerStack, frontend::DisplayInfo> mFrontEndDisplayInfos;

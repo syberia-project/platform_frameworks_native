@@ -185,8 +185,8 @@ public:
 
     public:
         using iterator_category = std::random_access_iterator_tag;
-        using size_type = ContainerType::size_type;
-        using difference_type = ContainerType::difference_type;
+        using size_type = typename ContainerType::size_type;
+        using difference_type = typename ContainerType::difference_type;
         using value_type = std::remove_cv_t<U>;
         using pointer = U*;
         using reference = U&;

@@ -14,6 +14,12 @@
  * limitations under the License.
  */
 
+/* Changes from Qualcomm Innovation Center are provided under the following license:
+ *
+ * Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause-Clear
+ */
+
 // TODO(b/129481165): remove the #pragma below and fix conversion issues
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wconversion"
@@ -76,6 +82,9 @@
 #include "FrontEnd/LayerHandle.h"
 #include "LayerProtoHelper.h"
 #include "MutexUtils.h"
+/* QTI_BEGIN */
+#include "QtiExtension/QtiSurfaceFlingerExtensionIntf.h"
+/* QTI_END */
 #include "SurfaceFlinger.h"
 #include "TimeStats/TimeStats.h"
 #include "TunnelModeEnabledReporter.h"
@@ -129,6 +138,12 @@ TimeStats::SetFrameRateVote frameRateToSetFrameRateVotePayload(Layer::FrameRate 
 
 } // namespace
 
+/* QTI_BEGIN */
+namespace surfaceflingerextension {
+class QtiSurfaceFlingerExtensionIntf;
+} // namespace surfaceflingerextension
+/* QTI_END */
+
 using namespace ftl::flag_operators;
 
 using base::StringAppendF;
@@ -152,6 +167,11 @@ Layer::Layer(const LayerCreationArgs& args)
         mTextureName(args.textureName),
         mLegacyLayerFE(args.flinger->getFactory().createLayerFE(mName)) {
     ALOGV("Creating Layer %s", getDebugName());
+
+#ifndef DISABLE_DEVICE_INTEGRATION
+    // Device Integration: set window type to LayerFE
+    mLegacyLayerFE->setWindowTypeForDIS(mWindowType);
+#endif
 
     uint32_t layerFlags = 0;
     if (args.flags & ISurfaceComposerClient::eHidden) layerFlags |= layer_state_t::eLayerHidden;
@@ -211,6 +231,10 @@ Layer::Layer(const LayerCreationArgs& args)
     mPremultipliedAlpha = !(args.flags & ISurfaceComposerClient::eNonPremultiplied);
     mPotentialCursor = args.flags & ISurfaceComposerClient::eCursorWindow;
     mProtectedByApp = args.flags & ISurfaceComposerClient::eProtectedByApp;
+
+    /* QTI_BEGIN */
+    mQtiLayerClass = mFlinger->mQtiSFExtnIntf->qtiGetLayerClass(mName);
+    /* QTI_END */
 
     mSnapshot->sequence = sequence;
     mSnapshot->name = getDebugName();
@@ -611,6 +635,14 @@ void Layer::prepareGeometryCompositionState() {
     snapshot->geomBufferUsesDisplayInverseTransform = getTransformToDisplayInverse();
     snapshot->geomUsesSourceCrop = usesSourceCrop();
     snapshot->isSecure = isSecure();
+
+    /* QTI_BEGIN */
+    snapshot->qtiIsSecureDisplay = mFlinger->mQtiSFExtnIntf->qtiIsSecureDisplay(
+            static_cast<sp<const GraphicBuffer>>(getBuffer()));
+    snapshot->qtiIsSecureCamera = mFlinger->mQtiSFExtnIntf->qtiIsSecureCamera(
+            static_cast<sp<const GraphicBuffer>>(getBuffer()));
+    snapshot->qtiLayerClass = mQtiLayerClass;
+    /* QTI_END */
 
     snapshot->metadata.clear();
     const auto& supportedMetadata = mFlinger->getHwComposer().getSupportedLayerGenericMetadata();
@@ -1602,6 +1634,9 @@ void Layer::miniDumpHeader(std::string& result) {
     result.append(" Layer name\n");
     result.append("           Z | ");
     result.append(" Window Type | ");
+    /* QTI_BEGIN */
+    result.append(" Layer Class |");
+    /* QTI_END */
     result.append(" Comp Type | ");
     result.append(" Transform | ");
     result.append("  Disp Frame (LTRB) | ");
@@ -1639,6 +1674,9 @@ void Layer::miniDump(std::string& result, const DisplayDevice& display) const {
         StringAppendF(&result, "  %10d | ", layerState.z);
     }
     StringAppendF(&result, "  %10d | ", mWindowType);
+    /* QTI_BEGIN */
+    StringAppendF(&result, "  %10d | ", mQtiLayerClass);
+    /* QTI_END */
     StringAppendF(&result, "%10s | ", toString(getCompositionType(display)).c_str());
     StringAppendF(&result, "%10s | ", toString(outputLayerState.bufferTransform).c_str());
     const Rect& frame = outputLayerState.displayFrame;
@@ -3082,6 +3120,14 @@ bool Layer::setBuffer(std::shared_ptr<renderengine::ExternalTexture>& buffer,
             frameNumberChanged ? bufferData.frameNumber : mDrawingState.frameNumber + 1;
     ATRACE_FORMAT_INSTANT("setBuffer %s - %" PRIu64, getDebugName(), frameNumber);
 
+    /* QTI_BEGIN */
+    if (bufferData.qtiInvalid) {
+        callReleaseBufferCallback(bufferData.releaseBufferListener, buffer->getBuffer(),
+                                  bufferData.frameNumber, bufferData.acquireFence);
+        return false;
+    }
+    /* QTI_END */
+
     if (mDrawingState.buffer) {
         mReleasePreviousBuffer = true;
         if (!mBufferInfo.mBuffer ||
@@ -4114,6 +4160,11 @@ bool Layer::latchBufferImpl(bool& recomputeVisibleRegions, nsecs_t latchTime, bo
         recomputeVisibleRegions = true;
     }
 
+    /* QTI_BEGIN */
+    mFlinger->mQtiSFExtnIntf->qtiSetPresentTime(getLayerStack().id, getSequence(),
+                                                mBufferInfo.mDesiredPresentTime);
+    /* QTI_END */
+
     return true;
 }
 
@@ -4366,6 +4417,16 @@ void Layer::setIsSmallDirty() {
     mSmallDirty = mFlinger->mScheduler->isSmallDirtyArea(mOwnerUid,
                                                          bounds.getWidth() * bounds.getHeight());
 }
+
+/* QTI_BEGIN */
+void Layer::qtiSetSmomoLayerStackId() {
+    qtiSmomoLayerStackId = getLayerStack().id;
+}
+
+uint32_t Layer::qtiGetSmomoLayerStackId() {
+    return qtiSmomoLayerStackId;
+}
+/* QTI_END */
 
 // ---------------------------------------------------------------------------
 

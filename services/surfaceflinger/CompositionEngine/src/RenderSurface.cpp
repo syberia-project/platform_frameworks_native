@@ -34,6 +34,10 @@
 #include <ui/Rect.h>
 #include <utils/Trace.h>
 
+/* QTI_BEGIN */
+#include "QtiExtension/QtiRenderSurfaceExtension.h"
+/* QTI_END */
+
 // TODO(b/129481165): remove the #pragma below and fix conversion issues
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wconversion"
@@ -66,6 +70,12 @@ RenderSurface::RenderSurface(const CompositionEngine& compositionEngine, Display
         mDisplaySurface(args.displaySurface),
         mSize(args.displayWidth, args.displayHeight),
         mMaxTextureCacheSize(args.maxTextureCacheSize) {
+    /* QTI_BEGIN */
+    mQtiDSExtnIntf = args.mQtiDSExtnIntf;
+    mQtiRSExtnIntf =
+            std::make_shared<android::compositionengineextension::QtiRenderSurfaceExtension>(this);
+    /* QTI_END */
+
     LOG_ALWAYS_FATAL_IF(!mNativeWindow);
 }
 
@@ -201,7 +211,12 @@ std::shared_ptr<renderengine::ExternalTexture> RenderSurface::dequeueBuffer(
 void RenderSurface::queueBuffer(base::unique_fd readyFence) {
     auto& state = mDisplay.getState();
 
-    if (state.usesClientComposition || state.flipClientTarget) {
+    /* QTI_BEGIN */
+    bool qtiFlipClientTarget = mQtiRSExtnIntf->qtiFlipClientTarget();
+    /* QTI_END */
+
+    if (state.usesClientComposition || state.flipClientTarget /* QTI_BEGIN */ ||
+        qtiFlipClientTarget /* QTI_END */) {
         // hasFlipClientTargetRequest could return true even if we haven't
         // dequeued a buffer before. Try dequeueing one if we don't have a
         // buffer ready.
@@ -220,9 +235,12 @@ void RenderSurface::queueBuffer(base::unique_fd readyFence) {
         if (mTexture == nullptr) {
             ALOGE("No buffer is ready for display [%s]", mDisplay.getName().c_str());
         } else {
-            status_t result = mNativeWindow->queueBuffer(mNativeWindow.get(),
-                                                         mTexture->getBuffer()->getNativeBuffer(),
-                                                         dup(readyFence));
+            status_t result =
+                    mNativeWindow->queueBuffer(mNativeWindow.get(),
+                                               mTexture->getBuffer()->getNativeBuffer(),
+                                               /* QTI_BEGIN */
+                                               qtiFlipClientTarget ? -1
+                                                                   : /* QTI_END */ dup(readyFence));
             if (result != NO_ERROR) {
                 ALOGE("Error when queueing buffer for display [%s]: %d", mDisplay.getName().c_str(),
                       result);
@@ -233,7 +251,10 @@ void RenderSurface::queueBuffer(base::unique_fd readyFence) {
                 } else {
                     mNativeWindow->cancelBuffer(mNativeWindow.get(),
                                                 mTexture->getBuffer()->getNativeBuffer(),
-                                                dup(readyFence));
+                                                /* QTI_BEGIN */
+                                                qtiFlipClientTarget
+                                                        ? -1
+                                                        : /* QTI_END */ dup(readyFence));
                 }
             }
 

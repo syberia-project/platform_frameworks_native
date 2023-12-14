@@ -1,0 +1,28 @@
+soong_config_module_type_import {
+    from: "frameworks/native/services/surfaceflinger/QtiExtension/Android.bp",
+    module_types: ["qtidisplayextension_cc_library_static"],
+}
+
+qtidisplayextension_cc_library_static {
+    name: "libqticompositionengineextension",
+    defaults: [
+        "android.hardware.graphics.composer3-ndk_shared",
+        "libcompositionengine_defaults",
+    ],
+    srcs: [
+        "QtiOutputExtension.cpp",
+        "QtiRenderSurfaceExtension.cpp",
+    ],
+    cflags: [
+        "-Wno-macro-redefined"
+    ],
+    soong_config_variables: {
+        displayextension: {
+            cflags: [
+                "-DQTI_DISPLAY_EXTENSION",
+                "-Wno-unused-parameter",
+            ],
+        },
+    },
+    include_dirs: ["frameworks/native/services/surfaceflinger/CompositionEngine/include"],
+}

@@ -14,6 +14,12 @@
  * limitations under the License.
  */
 
+/* Changes from Qualcomm Innovation Center are provided under the following license:
+ *
+ * Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause-Clear
+ */
+
 #pragma once
 
 #include "ComposerHal.h"
@@ -41,6 +47,19 @@
 
 // TODO(b/129481165): remove the #pragma below and fix conversion issues
 #pragma clang diagnostic pop // ignored "-Wconversion -Wextra"
+
+/* QTI_BEGIN */
+namespace android::surfaceflingerextension {
+class QtiHidlComposerHalExtension;
+}
+
+#ifdef QTI_DISPLAY_EXTENSION
+#include <vendor/qti/hardware/display/composer/3.1/IQtiComposerClient.h>
+#include <vendor/qti/hardware/display/composer/3.1/IQtiComposer.h>
+using vendor::qti::hardware::display::composer::V3_1::IQtiComposerClient;
+using vendor::qti::hardware::display::composer::V3_1::IQtiComposer;
+#endif
+/* QTI_END */
 
 namespace android::Hwc2 {
 
@@ -347,10 +366,21 @@ public:
     Error setRefreshRateChangedCallbackDebugEnabled(Display, bool) override;
 
 private:
+    /* QTI_BEGIN */
+    friend class android::surfaceflingerextension::QtiHidlComposerHalExtension;
+    /* QTI_END */
+
     class CommandWriter : public CommandWriterBase {
     public:
         explicit CommandWriter(uint32_t initialMaxSize) : CommandWriterBase(initialMaxSize) {}
         ~CommandWriter() override {}
+
+        /* QTI_BEGIN */
+        void qtiSetDisplayElapseTime(uint64_t time);
+        void qtiSetLayerType(uint32_t type);
+        void qtiSetClientTarget_3_1(int32_t slot, int acquireFence, Dataspace dataspace);
+        void qtiSetLayerFlag(uint32_t type);
+        /* QTI_END */
     };
 
     void registerCallback(const sp<IComposerCallback>& callback);
@@ -366,6 +396,11 @@ private:
     sp<V2_2::IComposerClient> mClient_2_2;
     sp<V2_3::IComposerClient> mClient_2_3;
     sp<IComposerClient> mClient_2_4;
+    /* QTI_BEGIN */
+#ifdef QTI_DISPLAY_EXTENSION
+    sp<IQtiComposerClient> mClient_3_1;
+#endif
+    /* QTI_END */
 
     // Buffer slots for layers are cleared by setting the slot buffer to this buffer.
     sp<GraphicBuffer> mClearSlotBuffer;

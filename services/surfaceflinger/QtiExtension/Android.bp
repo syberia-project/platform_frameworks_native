@@ -1,0 +1,110 @@
+// This contains libraries needed by both SF and QtiSurfaceFlingerExtension.
+soong_config_module_type {
+    name: "qtidisplayextension_cc_defaults",
+    module_type: "cc_defaults",
+    config_namespace: "qtidisplaycommonsys",
+    bool_variables: [
+        "displayextension",
+        "composer3ext",
+    ],
+    properties: [
+        "cflags",
+        "srcs",
+        "enabled",
+        "shared_libs",
+    ],
+}
+
+soong_config_module_type {
+    name: "qtidisplayextension_cc_library_static",
+    module_type: "cc_library_static",
+    config_namespace: "qtidisplaycommonsys",
+    bool_variables: [
+        "displayextension",
+        "composer3ext",
+    ],
+    properties: [
+        "cflags",
+        "srcs",
+        "enabled",
+        "shared_libs",
+    ],
+}
+
+qtidisplayextension_cc_defaults {
+    name: "displaycommonsys_defaults",
+    soong_config_variables: {
+        displayextension: {
+            cflags: [
+                "-DQTI_DISPLAY_EXTENSION",
+                "-Wno-unused-parameter",
+            ],
+            shared_libs: [
+                "libdisplayconfig.system.qti",
+                "libbinder_ndk",
+                "vendor.qti.hardware.display.composer@3.0",
+                "vendor.qti.hardware.display.composer@3.1",
+                "vendor.qti.hardware.display.config-V7-ndk",
+            ],
+        },
+        composer3ext: {
+            cflags: [
+                "-Wno-unused-parameter",
+                "-DQTI_COMPOSER3_EXTENSIONS",
+            ],
+            shared_libs: ["vendor.qti.hardware.display.composer3-V1-ndk"],
+        },
+    },
+}
+
+cc_defaults {
+    name: "libqtisurfaceflingerextension_defaults",
+    defaults: [
+        "displaycommonsys_defaults",
+    ],
+    header_libs: [
+        "display_intf_headers",
+    ],
+    local_include_dirs: ["."],
+    export_include_dirs: ["."],
+}
+
+// This contains libraries needed by QtiSurfaceFlingerExtension only.
+qtidisplayextension_cc_library_static {
+    name: "libqtisurfaceflingerextension",
+    defaults: [
+        "libqtisurfaceflingerextension_defaults",
+        "libsurfaceflinger_defaults",
+    ],
+    cflags: [
+        "-DLOG_TAG=\"QtiSurfaceFlingerExtension\"",
+        "-Wno-macro-redefined",
+        "-Wthread-safety",
+        "-Wthread-safety-analysis"
+    ],
+    header_libs: [
+        "libsurfaceflinger_headers",
+    ],
+    srcs: [
+        "QtiNullExtension.cpp",
+        "QtiNullDisplaySurfaceExtension.cpp",
+        "QtiSurfaceFlingerExtensionFactory.cpp",
+    ],
+    soong_config_variables: {
+        displayextension: {
+            srcs: [
+                "QtiAidlComposerHalExtension.cpp",
+                "QtiFeatureManager.cpp",
+                "QtiDolphinWrapper.cpp",
+                "QtiFramebufferSurfaceExtension.cpp",
+                "QtiHidlComposerHalExtension.cpp",
+                "QtiHWComposerExtension.cpp",
+                "QtiPhaseOffsetsExtension.cpp",
+                "QtiPowerAdvisorExtension.cpp",
+                "QtiSurfaceFlingerExtension.cpp",
+                "QtiVirtualDisplaySurfaceExtension.cpp",
+                "QtiWorkDurationsExtension.cpp",
+            ],
+        },
+    },
+}
