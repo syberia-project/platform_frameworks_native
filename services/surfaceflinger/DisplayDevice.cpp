@@ -213,7 +213,10 @@ void DisplayDevice::setActiveMode(DisplayModeId modeId, Fps displayFps, Fps rend
     ATRACE_INT(mRenderFrameRateFPSTrace.c_str(), renderFps.getIntValue());
 
     mRefreshRateSelector->setActiveMode(modeId, renderFps);
-    updateRefreshRateOverlayRate(displayFps, renderFps);
+
+    if (mRefreshRateOverlay) {
+        mRefreshRateOverlay->changeRefreshRate(displayFps, renderFps);
+    }
 }
 
 status_t DisplayDevice::initiateModeChange(const ActiveModeInfo& info,
@@ -443,7 +446,7 @@ void DisplayDevice::enableRefreshRateOverlay(bool enable, bool setByHwc, bool sh
     mRefreshRateOverlay = std::make_unique<RefreshRateOverlay>(fpsRange, features);
     mRefreshRateOverlay->setLayerStack(getLayerStack());
     mRefreshRateOverlay->setViewport(getSize());
-    updateRefreshRateOverlayRate(getActiveMode().modePtr->getFps(), getActiveMode().fps, setByHwc);
+    updateRefreshRateOverlayRate(getActiveMode().modePtr->getFps(), getActiveMode().fps);
 }
 
 void DisplayDevice::updateRefreshRateOverlayRate(Fps displayFps, Fps renderFps, bool setByHwc) {
