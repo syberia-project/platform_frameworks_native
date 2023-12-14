@@ -27,7 +27,7 @@ enum class Feature : std::uint8_t {
     kKernelIdleTimer = 1 << 1,
     kContentDetection = 1 << 2,
     kTracePredictedVsync = 1 << 3,
-    kBackpressureGpuComposition = 1 << 4,
+//    kBackpressureGpuComposition = 1 << 4,
     kSmallDirtyContentDetection = 1 << 5,
 };
 
