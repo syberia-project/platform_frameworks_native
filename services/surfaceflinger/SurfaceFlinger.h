@@ -646,8 +646,7 @@ private:
 
     // ICompositor overrides:
     void configure() override REQUIRES(kMainThreadContext);
-    bool commit(PhysicalDisplayId pacesetterId, const scheduler::FrameTargets&) override
-            REQUIRES(kMainThreadContext);
+    bool commit(const scheduler::FrameTarget&) override REQUIRES(kMainThreadContext);
     CompositeResultsPerDisplay composite(PhysicalDisplayId pacesetterId,
                                          const scheduler::FrameTargeters&) override
             REQUIRES(kMainThreadContext);
@@ -690,10 +689,11 @@ private:
             REQUIRES(mStateLock);
 
     status_t setActiveModeFromBackdoor(const sp<display::DisplayToken>&, DisplayModeId);
-
-    void initiateDisplayModeChanges() REQUIRES(mStateLock, kMainThreadContext);
-    void finalizeDisplayModeChange(DisplayDevice&) REQUIRES(mStateLock, kMainThreadContext);
-
+    // Sets the active mode and a new refresh rate in SF.
+    void updateInternalStateWithChangedMode() REQUIRES(mStateLock, kMainThreadContext);
+    // Calls to setActiveMode on the main thread if there is a pending mode change
+    // that needs to be applied.
+    void setActiveModeInHwcIfNeeded() REQUIRES(mStateLock, kMainThreadContext);
     void clearDesiredActiveModeState(const sp<DisplayDevice>&) REQUIRES(mStateLock);
     // Called when active mode is no longer is progress
     void desiredActiveModeChangeDone(const sp<DisplayDevice>&) REQUIRES(mStateLock);
@@ -1015,9 +1015,7 @@ private:
                                const DisplayDeviceState& drawingState)
             REQUIRES(mStateLock, kMainThreadContext);
 
-    void dispatchDisplayHotplugEvent(PhysicalDisplayId, bool connected);
-    void dispatchDisplayModeChangeEvent(PhysicalDisplayId, const scheduler::FrameRateMode&)
-            REQUIRES(mStateLock);
+    void dispatchDisplayHotplugEvent(PhysicalDisplayId displayId, bool connected);
 
     /*
      * VSYNC
@@ -1335,6 +1333,9 @@ private:
 
     std::unique_ptr<scheduler::RefreshRateStats> mRefreshRateStats;
     scheduler::PresentLatencyTracker mPresentLatencyTracker GUARDED_BY(kMainThreadContext);
+
+    // below flags are set by main thread only
+    bool mSetActiveModePending = false;
 
     bool mLumaSampling = true;
     sp<RegionSamplingThread> mRegionSamplingThread;

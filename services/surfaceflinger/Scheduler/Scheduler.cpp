@@ -186,17 +186,7 @@ void Scheduler::onFrameSignal(ICompositor& compositor, VsyncId vsyncId,
     FrameTargeter& pacesetterTargeter = *pacesetterOpt->get().targeterPtr;
     pacesetterTargeter.beginFrame(beginFrameArgs, *pacesetterOpt->get().schedulePtr);
 
-    FrameTargets targets;
-    targets.try_emplace(pacesetterId, &pacesetterTargeter.target());
-
-    for (const auto& [id, display] : mDisplays) {
-        if (id == pacesetterId) continue;
-
-        const FrameTargeter& targeter = *display.targeterPtr;
-        targets.try_emplace(id, &targeter.target());
-    }
-
-    if (!compositor.commit(pacesetterId, targets)) return;
+    if (!compositor.commit(pacesetterTargeter.target())) return;
 
     // TODO(b/256196556): Choose the frontrunner display.
     FrameTargeters targeters;

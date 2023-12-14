@@ -380,19 +380,10 @@ public:
                                   .sfWorkDuration = 10ms},
                                  *mScheduler->getVsyncSchedule());
 
-        scheduler::FrameTargets targets;
-        scheduler::FrameTargeters targeters;
-
-        for (const auto& [id, display] :
-             FTL_FAKE_GUARD(mFlinger->mStateLock, mFlinger->mPhysicalDisplays)) {
-            targets.try_emplace(id, &frameTargeter.target());
-            targeters.try_emplace(id, &frameTargeter);
-        }
-
-        mFlinger->commit(displayId, targets);
+        mFlinger->commit(frameTargeter.target());
 
         if (composite) {
-            mFlinger->composite(displayId, targeters);
+            mFlinger->composite(displayId, ftl::init::map(displayId, &frameTargeter));
         }
     }
 
