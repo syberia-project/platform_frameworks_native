@@ -442,15 +442,16 @@ cc_library_static {
     vendor_available: true,
     defaults: [
         "libgui_bufferqueue-defaults",
+        "libguiextension_defaults",
     ],
     header_libs: [
         "libgui_aidl_headers",
+        "display_intf_headers",
     ],
     static_libs: [
         "libgui_window_info_static"
     ],
     shared_libs: [
-//            "//vendor/qcom/opensource/display:libdisplayconfig.system.qti",
             "libbinder_ndk",
             "vendor.qti.hardware.display.composer@3.0",
             "vendor.qti.hardware.display.composer@3.1",
@@ -459,6 +460,7 @@ cc_library_static {
     srcs: [
         "QtiExtension/QtiBufferQueueProducerExtension.cpp",
         "QtiExtension/QtiBLASTBufferQueueExtension.cpp",
+        "QtiExtension/QtiSurfaceExtension.cpp",
     ],
     cflags: [
         "-Wno-unused-parameter",
@@ -472,6 +474,14 @@ cc_defaults {
     name: "libguiextension_defaults",
     cflags: [
             "-DQTI_DISPLAY_EXTENSION",
+    ],
+    header_libs: [
+        "display_intf_headers",
+    ],
+    shared_libs: [
+        "libgralloctypes",
+        "libhidlbase",
+        "android.hardware.graphics.mapper@4.0",
     ],
 }
 // QTI_END
