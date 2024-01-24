@@ -3697,6 +3697,9 @@ void SurfaceFlinger::processDisplayChanged(const wp<IBinder>& displayToken,
             if (display->isVirtual()) {
                 releaseVirtualDisplay(display->getVirtualId());
             }
+            /* QTI_BEGIN */
+            mQtiSFExtnIntf->qtiDestroySmomoInstance(display);
+            /* QTI_END */
         }
 
         mDisplays.erase(displayToken);
@@ -4845,7 +4848,9 @@ status_t SurfaceFlinger::setTransactionState(
             }
 
             /* QTI_BEGIN */
-            mQtiSFExtnIntf->qtiDolphinTrackBufferIncrement(layerName.c_str());
+            if (!(flags & eOneWay)) {
+                mQtiSFExtnIntf->qtiDolphinTrackBufferIncrement(layerName.c_str());
+            }
 
             mQtiSFExtnIntf->qtiUpdateSmomoLayerInfo(layer, desiredPresentTime, isAutoTimestamp,
                                                     resolvedState.externalTexture,
