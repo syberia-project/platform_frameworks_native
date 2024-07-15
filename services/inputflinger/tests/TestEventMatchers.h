@@ -609,10 +609,33 @@ MATCHER_P(WithRepeatCount, repeatCount, "KeyEvent with specified repeat count") 
     return arg.getRepeatCount() == repeatCount;
 }
 
-MATCHER_P2(WithPointerId, index, id, "MotionEvent with specified pointer ID for pointer index") {
-    const auto argPointerId = arg.pointerProperties[index].id;
-    *result_listener << "expected pointer with index " << index << " to have ID " << argPointerId;
-    return argPointerId == id;
+class WithPointerIdMatcher {
+public:
+    using is_gtest_matcher = void;
+    explicit WithPointerIdMatcher(size_t index, int32_t pointerId)
+          : mIndex(index), mPointerId(pointerId) {}
+
+    bool MatchAndExplain(const NotifyMotionArgs& args, std::ostream*) const {
+        return args.pointerProperties[mIndex].id == mPointerId;
+    }
+
+    bool MatchAndExplain(const MotionEvent& event, std::ostream*) const {
+        return event.getPointerId(mIndex) == mPointerId;
+    }
+
+    void DescribeTo(std::ostream* os) const {
+        *os << "with pointer[" << mIndex << "] id = " << mPointerId;
+    }
+
+    void DescribeNegationTo(std::ostream* os) const { *os << "wrong pointerId"; }
+
+private:
+    const size_t mIndex;
+    const int32_t mPointerId;
+};
+
+inline WithPointerIdMatcher WithPointerId(size_t index, int32_t pointerId) {
+    return WithPointerIdMatcher(index, pointerId);
 }
 
 MATCHER_P2(WithCursorPosition, x, y, "InputEvent with specified cursor position") {

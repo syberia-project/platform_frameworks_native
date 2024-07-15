@@ -2654,6 +2654,9 @@ std::vector<InputTarget> InputDispatcher::findTouchedWindowTargetsLocked(
                 if (mDragState && mDragState->dragWindow == touchedWindow.windowHandle) {
                     continue;
                 }
+                if (!touchedWindow.hasTouchingPointers(entry.deviceId)) {
+                    continue;
+                }
                 touchedWindow.addTouchingPointers(entry.deviceId, touchingPointers);
             }
         }
